@@ -47,6 +47,9 @@ export type Health = {
   model_path: string;
   model_loaded: boolean;
   model_dir_ready: boolean;
+  design_model_id?: string;
+  design_model_ready?: boolean;
+  current_mode?: "clone" | "design" | string;
   batch_size: number;
   languages?: Language[];
 };
@@ -113,11 +116,15 @@ export async function createJob(opts: {
   refText?: string;
   batchSize: number;
   language: string;
+  mode?: "clone" | "design";
+  instruct?: string;
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
   body.set("batch_size", String(opts.batchSize));
   body.set("language", opts.language);
+  body.set("mode", opts.mode || "clone");
+  if (opts.instruct) body.set("instruct", opts.instruct);
   if (opts.voiceId) body.set("voice_id", opts.voiceId);
   if (opts.refAudio) body.set("ref_audio", opts.refAudio);
   if (opts.refText) body.set("ref_text", opts.refText);

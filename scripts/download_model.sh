@@ -2,8 +2,22 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEST="$ROOT/models/qwen3-tts"
-MODEL_ID="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+KIND="${1:-base}"
+
+case "$KIND" in
+  base)
+    DEST="$ROOT/models/qwen3-tts"
+    MODEL_ID="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+    ;;
+  design)
+    DEST="$ROOT/models/qwen3-tts-voice-design"
+    MODEL_ID="mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
+    ;;
+  *)
+    echo "Usage: $0 [base|design]"
+    exit 1
+    ;;
+esac
 
 # shellcheck disable=SC1091
 source "$ROOT/scripts/mirrors.sh"

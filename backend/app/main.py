@@ -17,6 +17,8 @@ from . import voices
 from .config import (
     API_KEY,
     BATCH_SIZE,
+    DESIGN_MODEL_DIR,
+    DESIGN_MODEL_ID,
     FRONTEND_DIST,
     LANGUAGE,
     LANGUAGES,
@@ -66,11 +68,26 @@ class SpeechRequest(BaseModel):
     ref_text: Optional[str] = None
     language: str = LANGUAGE
     batch_size: int = BATCH_SIZE
+    instruct: Optional[str] = None
+    mode: str = "clone"
 
 
 class SplitRequest(BaseModel):
     text: str
     language: str = LANGUAGE
+
+
+def _normalize_mode(mode: str | None) -> str:
+    value = (mode or "clone").strip().lower()
+    if value in {"design", "voice_design", "describe", "description"}:
+        return "design"
+    if value in {"clone", "base", "icl"}:
+        return "clone"
+    raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
+
+
+def _looks_like_model(path: Path) -> bool:
+    return path.is_dir() and (path / "config.json").exists() and any(path.glob("*.safetensors"))
 
 
 def _normalize_language(language: str | None) -> str:
@@ -87,6 +104,8 @@ class JobRequest(BaseModel):
     ref_text: Optional[str] = None
     batch_size: int = Field(default=BATCH_SIZE, ge=1, le=8)
     language: str = LANGUAGE
+    mode: str = "clone"
+    instruct: Optional[str] = None
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -111,10 +130,13 @@ def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Opt
 def health():
     return {
         "ok": True,
-        "model_id": MODEL_ID,
+        "model_id": MODEL_ID if engine.mode != "design" else DESIGN_MODEL_ID,
         "model_path": engine.model_path,
         "model_loaded": engine.loaded,
-        "model_dir_ready": (MODEL_DIR / "config.json").exists(),
+        "model_dir_ready": _looks_like_model(MODEL_DIR),
+        "design_model_id": DESIGN_MODEL_ID,
+        "design_model_ready": _looks_like_model(DESIGN_MODEL_DIR),
+        "current_mode": engine.mode,
         "batch_size": BATCH_SIZE,
         "languages": LANGUAGES,
         "last_stats": engine.last_stats,
@@ -185,14 +207,22 @@ async def api_create_job(
     ref_text: Optional[str] = Form(None),
     batch_size: int = Form(BATCH_SIZE),
     language: str = Form(LANGUAGE),
+    mode: str = Form("clone"),
+    instruct: Optional[str] = Form(None),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
         raise HTTPException(status_code=400, detail="text is required")
 
+    job_mode = _normalize_mode(mode)
+    description = (instruct or "").strip()
     temp_ref: Optional[Path] = None
     try:
-        if ref_audio is not None and ref_audio.filename:
+        if job_mode == "design":
+            if not description:
+                raise HTTPException(status_code=400, detail="instruct is required for described voices")
+            audio_path, transcript = "", ""
+        elif ref_audio is not None and ref_audio.filename:
             suffix = Path(ref_audio.filename).suffix or ".wav"
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(await ref_audio.read())
@@ -208,6 +238,8 @@ async def api_create_job(
             ref_text=transcript,
             batch_size=batch_size,
             language=_normalize_language(language),
+            mode=job_mode,
+            instruct=description,
         )
         return public_job(job)
     except KeyError:
@@ -224,8 +256,15 @@ async def api_create_job(
 
 @app.post("/api/jobs/json")
 def api_create_job_json(payload: JobRequest):
+    job_mode = _normalize_mode(payload.mode)
+    description = (payload.instruct or "").strip()
     try:
-        audio_path, transcript = _resolve_clone(payload.voice_id, payload.ref_audio, payload.ref_text)
+        if job_mode == "design":
+            if not description:
+                raise HTTPException(status_code=400, detail="instruct is required for described voices")
+            audio_path, transcript = "", ""
+        else:
+            audio_path, transcript = _resolve_clone(payload.voice_id, payload.ref_audio, payload.ref_text)
     except KeyError:
         raise HTTPException(status_code=404, detail="Voice not found")
     job = runner.submit(
@@ -234,6 +273,8 @@ def api_create_job_json(payload: JobRequest):
         ref_text=transcript,
         batch_size=payload.batch_size,
         language=_normalize_language(payload.language),
+        mode=job_mode,
+        instruct=description,
     )
     return public_job(job)
 
@@ -304,13 +345,23 @@ def openai_speech(payload: SpeechRequest, authorization: Optional[str] = Header(
     if not payload.input.strip():
         raise HTTPException(status_code=400, detail="input is required")
     try:
-        ref_audio, ref_text = _resolve_clone(payload.voice, payload.ref_audio, payload.ref_text)
+        job_mode = _normalize_mode(payload.mode)
+        description = (payload.instruct or "").strip()
+        if job_mode == "design" or (description and not payload.ref_audio and not payload.voice):
+            job_mode = "design"
+            if not description:
+                raise HTTPException(status_code=400, detail="instruct is required for described voices")
+            ref_audio, ref_text = "", ""
+        else:
+            ref_audio, ref_text = _resolve_clone(payload.voice, payload.ref_audio, payload.ref_text)
         stats = engine.synthesize(
             payload.input,
             ref_audio,
             ref_text,
             batch_size=payload.batch_size,
             language=_normalize_language(payload.language),
+            mode=job_mode,
+            instruct=description,
         )
         from .audio_util import convert_format
 

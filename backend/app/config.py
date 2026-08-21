@@ -11,6 +11,13 @@ MODEL_ID = os.getenv(
     "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
 )
 MODEL_DIR = Path(os.getenv("QWEN_TTS_MODEL", ROOT / "models" / "qwen3-tts")).resolve()
+DESIGN_MODEL_ID = os.getenv(
+    "QWEN_TTS_DESIGN_MODEL_ID",
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
+)
+DESIGN_MODEL_DIR = Path(
+    os.getenv("QWEN_TTS_DESIGN_MODEL", ROOT / "models" / "qwen3-tts-voice-design")
+).resolve()
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
 FRONTEND_DIST = ROOT / "frontend" / "dist"
@@ -40,5 +47,5 @@ LANGUAGES = [
 
 LANGUAGE_BY_ID = {item["id"]: item for item in LANGUAGES}
 
-for path in (VOICES_DIR, OUTPUT_DIR, MODEL_DIR.parent):
+for path in (VOICES_DIR, OUTPUT_DIR, MODEL_DIR.parent, DESIGN_MODEL_DIR.parent):
     path.mkdir(parents=True, exist_ok=True)

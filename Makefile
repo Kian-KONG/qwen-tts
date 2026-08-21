@@ -10,12 +10,13 @@ export NPM_CONFIG_REGISTRY ?= https://registry.npmmirror.com
 export HF_ENDPOINT ?= https://hf-mirror.com
 export HF_MIRROR ?= https://hf-mirror.com
 
-.PHONY: help setup download start dev tunnel tunnel-setup health
+.PHONY: help setup download download-design start dev tunnel tunnel-setup health
 
 help:
 	@echo "Apple Silicon / MLX targets:"
 	@echo "  make setup         Install Python env, mlx-audio, ffmpeg"
-	@echo "  make download      Download Qwen3-TTS bf16 via ModelScope / hf-mirror"
+	@echo "  make download      Download Base bf16 (voice clone)"
+	@echo "  make download-design Download VoiceDesign bf16 (described voice)"
 	@echo "  make start         Build frontend and serve on :8000"
 	@echo "  make dev           Backend + Vite hot reload"
 	@echo "  make health        GET /health"
@@ -26,7 +27,10 @@ setup:
 	./scripts/setup.sh
 
 download:
-	./scripts/download_model.sh
+	./scripts/download_model.sh base
+
+download-design:
+	./scripts/download_model.sh design
 
 start:
 	./scripts/start.sh

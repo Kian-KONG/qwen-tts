@@ -19,6 +19,25 @@ const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
 
 const ITEM_MARK = /^\s*(?:\d{1,3}[\.\)、:：]|\(\d{1,3}\)|\（\d{1,3}\）)\s*/;
 
+const VOICE_PRESETS = [
+  {
+    label: "沉稳男旁白",
+    text: "A calm adult male narrator, warm mid pitch, clear studio diction, American English, no accent, professional documentary tone.",
+  },
+  {
+    label: "年轻女声",
+    text: "A cheerful young female voice, bright and energetic, slightly high pitch, natural conversational English.",
+  },
+  {
+    label: "新闻主播",
+    text: "A confident news anchor voice, even pacing, authoritative but not harsh, broadcast studio quality.",
+  },
+  {
+    label: "温柔女旁白",
+    text: "A gentle adult female narrator, soft mid pitch, slow and warm, intimate storytelling tone.",
+  },
+];
+
 function parseMarkdownList(text: string): string[] {
   const items: string[] = [];
   let current: string | null = null;
@@ -58,6 +77,8 @@ export default function App() {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voiceId, setVoiceId] = useState("");
   const [voiceName, setVoiceName] = useState("Studio A");
+  const [voiceMode, setVoiceMode] = useState<"design" | "clone">("design");
+  const [instruct, setInstruct] = useState(VOICE_PRESETS[0].text);
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refText, setRefText] = useState("");
   const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
@@ -165,9 +186,11 @@ export default function App() {
     try {
       const next = await createJob({
         text: markdown,
-        voiceId: voiceId || undefined,
-        refAudio: voiceId ? undefined : refFile || undefined,
-        refText: voiceId ? undefined : refText,
+        mode: voiceMode,
+        instruct: voiceMode === "design" ? instruct : undefined,
+        voiceId: voiceMode === "clone" ? voiceId || undefined : undefined,
+        refAudio: voiceMode === "clone" && !voiceId ? refFile || undefined : undefined,
+        refText: voiceMode === "clone" && !voiceId ? refText : undefined,
         batchSize,
         language,
       });
@@ -199,9 +222,13 @@ export default function App() {
         <div className="status">
           <span className={health?.model_loaded || health?.model_dir_ready ? "dot on" : "dot"} />
           <div>
-            <strong>{health?.model_id?.split("/").pop() || "等待模型"}</strong>
+            <strong>
+              {(health?.current_mode === "design" ? health?.design_model_id : health?.model_id)?.split("/").pop() ||
+                "等待模型"}
+            </strong>
             <p>
-              {health?.model_loaded ? "已加载" : health?.model_dir_ready ? "权重已就绪" : "未下载"} · {language} · batch {batchSize}
+              {health?.model_loaded ? "已加载" : health?.model_dir_ready ? "权重已就绪" : "未下载"}
+              {health?.design_model_ready ? " · 描述音色可用" : " · 描述音色未下载"} · {language} · batch {batchSize}
             </p>
           </div>
         </div>
@@ -209,48 +236,88 @@ export default function App() {
 
       <main className="grid">
         <section className="panel">
-          <h2>1. 克隆音色</h2>
-          <p className="hint">录 3–10 秒干净参考音频，语言尽量和文稿一致，并写上逐字稿。</p>
-          <form className="stack" onSubmit={onSaveVoice}>
-            <label>
-              音色名称
-              <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
-            </label>
-            <label>
-              参考音频
-              <input
-                type="file"
-                accept="audio/wav,audio/mpeg,audio/*"
-                onChange={(e) => setRefFile(e.target.files?.[0] ?? null)}
-              />
-            </label>
-            <label>
-              参考音频文字稿
-              <textarea
-                rows={4}
-                value={refText}
-                onChange={(e) => setRefText(e.target.value)}
-                placeholder="Exactly what the reference clip says."
-              />
-            </label>
-            <div className="row">
-              <button type="submit" disabled={busy}>
-                保存到音色库
-              </button>
-              <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>
-                <option value="">本次上传 / 未选择</option>
-                {voices.map((voice) => (
-                  <option key={voice.id} value={voice.id}>
-                    {voice.name}
-                    {voice.duration_sec ? ` · ${voice.duration_sec}s` : ""}
-                  </option>
+          <h2>1. 音色</h2>
+          <div className="mode-switch">
+            <button type="button" className={voiceMode === "design" ? "active" : "ghost"} onClick={() => setVoiceMode("design")}>
+              描述音色
+            </button>
+            <button type="button" className={voiceMode === "clone" ? "active" : "ghost"} onClick={() => setVoiceMode("clone")}>
+              声音克隆
+            </button>
+          </div>
+          {voiceMode === "design" ? (
+            <div className="stack">
+              <p className="hint">
+                不用上传参考音频。用一段话描述年龄、性别、口音和气质即可直接配音。
+                {health?.design_model_ready ? "" : " 当前还没下载 VoiceDesign 权重，请先运行 `make download-design`。"}
+              </p>
+              <div className="chips">
+                {VOICE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    className={instruct === preset.text ? "chip on" : "chip"}
+                    onClick={() => setInstruct(preset.text)}
+                  >
+                    {preset.label}
+                  </button>
                 ))}
-              </select>
-              <button type="button" className="ghost" onClick={() => void onDeleteVoice()} disabled={!voiceId}>
-                删除
-              </button>
+              </div>
+              <label>
+                音色描述
+                <textarea
+                  rows={5}
+                  value={instruct}
+                  onChange={(e) => setInstruct(e.target.value)}
+                  placeholder="A calm adult male narrator, warm mid pitch, clear studio diction..."
+                />
+              </label>
             </div>
-          </form>
+          ) : (
+            <>
+              <p className="hint">录 3–10 秒干净参考音频，语言尽量和文稿一致，并写上逐字稿。</p>
+              <form className="stack" onSubmit={onSaveVoice}>
+                <label>
+                  音色名称
+                  <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
+                </label>
+                <label>
+                  参考音频
+                  <input
+                    type="file"
+                    accept="audio/wav,audio/mpeg,audio/*"
+                    onChange={(e) => setRefFile(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+                <label>
+                  参考音频文字稿
+                  <textarea
+                    rows={4}
+                    value={refText}
+                    onChange={(e) => setRefText(e.target.value)}
+                    placeholder="Exactly what the reference clip says."
+                  />
+                </label>
+                <div className="row">
+                  <button type="submit" disabled={busy}>
+                    保存到音色库
+                  </button>
+                  <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>
+                    <option value="">本次上传 / 未选择</option>
+                    {voices.map((voice) => (
+                      <option key={voice.id} value={voice.id}>
+                        {voice.name}
+                        {voice.duration_sec ? ` · ${voice.duration_sec}s` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="ghost" onClick={() => void onDeleteVoice()} disabled={!voiceId}>
+                    删除
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
         </section>
 
         <section className="panel">
@@ -306,7 +373,15 @@ export default function App() {
               </button>
               <span>{filledSegments.length} 段</span>
             </div>
-            <button type="submit" disabled={busy || filledSegments.length === 0}>
+            <button
+              type="submit"
+              disabled={
+                busy ||
+                filledSegments.length === 0 ||
+                (voiceMode === "design" && (!instruct.trim() || health?.design_model_ready === false)) ||
+                (voiceMode === "clone" && !voiceId && (!refFile || !refText.trim()))
+              }
+            >
               {busy ? "提交中…" : `分段配音（${filledSegments.length} 段）`}
             </button>
           </form>

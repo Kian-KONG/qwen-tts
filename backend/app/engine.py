@@ -7,7 +7,16 @@ from pathlib import Path
 import numpy as np
 
 from . import audio_util, chunking
-from .config import BATCH_SIZE, GAP_MS, LANGUAGE, LANGUAGE_BY_ID, MODEL_DIR, MODEL_ID, OUTPUT_DIR
+from .config import (
+    BATCH_SIZE,
+    DESIGN_MODEL_DIR,
+    GAP_MS,
+    LANGUAGE,
+    LANGUAGE_BY_ID,
+    MODEL_DIR,
+    MODEL_ID,
+    OUTPUT_DIR,
+)
 
 
 class TTSEngine:
@@ -16,41 +25,67 @@ class TTSEngine:
         self.sample_rate = 24000
         self.lock = threading.Lock()
         self.loaded = False
+        self.mode = "clone"
         self.model_path = str(MODEL_DIR if _looks_like_model(MODEL_DIR) else MODEL_ID)
         self.last_stats: dict = {}
 
-    def load(self) -> None:
-        from mlx_audio.tts.utils import load_model
-
+    def load(self, mode: str = "clone") -> None:
         with self.lock:
-            if self.loaded:
-                return
-            self.model = load_model(self.model_path)
-            self.sample_rate = int(getattr(self.model, "sample_rate", 24000))
-            self.loaded = True
+            self._load_unlocked(mode)
+
+    def _load_unlocked(self, mode: str) -> None:
+        mode = "design" if mode == "design" else "clone"
+        if self.loaded and self.mode == mode and self.model is not None:
+            return
+        from mlx_audio.tts.utils import load_model
+        import gc
+        import mlx.core as mx
+
+        self.model = None
+        self.loaded = False
+        gc.collect()
+        mx.clear_cache()
+        if mode == "design":
+            if not _looks_like_model(DESIGN_MODEL_DIR):
+                raise FileNotFoundError(
+                    "VoiceDesign model is missing. Run: make download-design"
+                )
+            path = DESIGN_MODEL_DIR
+        else:
+            path = MODEL_DIR if _looks_like_model(MODEL_DIR) else MODEL_ID
+        self.model_path = str(path)
+        self.model = load_model(self.model_path)
+        self.sample_rate = int(getattr(self.model, "sample_rate", 24000))
+        self.mode = mode
+        self.loaded = True
 
     def synthesize(
         self,
         text: str,
-        ref_audio: str,
-        ref_text: str,
+        ref_audio: str = "",
+        ref_text: str = "",
         *,
         batch_size: int = BATCH_SIZE,
         language: str = LANGUAGE,
         job_id: str | None = None,
+        mode: str = "clone",
+        instruct: str = "",
         progress_cb=None,
     ) -> dict:
-        if not self.loaded:
-            self.load()
+        mode = "design" if mode == "design" else "clone"
         lang = LANGUAGE_BY_ID.get(language, LANGUAGE_BY_ID["Auto"])
         lang_code = lang["lang_code"]
         chunks = chunking.split_script(text, language)
         if not chunks:
             raise ValueError("Script is empty after splitting")
-        if not ref_audio or not Path(ref_audio).exists():
-            raise FileNotFoundError("Reference audio is required for Qwen3-TTS Base cloning")
-        if not (ref_text or "").strip():
-            raise ValueError("Reference transcript is required for ICL voice cloning")
+        if mode == "design":
+            if not instruct.strip():
+                raise ValueError("Voice description is required")
+        else:
+            if not ref_audio or not Path(ref_audio).exists():
+                raise FileNotFoundError("Reference audio is required for voice cloning")
+            if not (ref_text or "").strip():
+                raise ValueError("Reference transcript is required for ICL voice cloning")
 
         batch_size = max(1, min(batch_size or BATCH_SIZE, 8))
         wavs: list[np.ndarray] = []
@@ -58,9 +93,13 @@ class TTSEngine:
         native_sr = self.sample_rate
 
         with self.lock:
+            self._load_unlocked(mode)
             for offset in range(0, len(chunks), batch_size):
                 batch = chunks[offset : offset + batch_size]
-                collected = self._generate_batch(batch, ref_audio, ref_text.strip(), lang_code)
+                if mode == "design":
+                    collected = self._generate_design_batch(batch, instruct.strip(), lang_code)
+                else:
+                    collected = self._generate_batch(batch, ref_audio, ref_text.strip(), lang_code)
                 for index in range(len(batch)):
                     if index not in collected:
                         raise RuntimeError(f"Missing audio for chunk {offset + index}")
@@ -101,6 +140,7 @@ class TTSEngine:
         stats = {
             "chunks": len(chunks),
             "language": language,
+            "mode": mode,
             "batch_size": batch_size,
             "elapsed_sec": round(elapsed, 2),
             "audio_sec": round(duration, 2),
@@ -130,35 +170,70 @@ class TTSEngine:
         try:
             results = list(self.model.batch_generate(**kwargs))
         except TypeError:
-            collected: dict[int, tuple[np.ndarray, int]] = {}
-            for index, text in enumerate(batch):
-                item = list(
-                    self.model.generate(
-                        text=text,
-                        ref_audio=ref_audio,
-                        ref_text=ref_text,
-                        lang_code=language,
-                        stream=False,
-                        verbose=False,
-                    )
-                )[0]
-                collected[index] = (
-                    np.array(item.audio),
-                    int(getattr(item, "sample_rate", self.sample_rate)),
-                )
-            return collected
+            return self._generate_one_by_one(batch, language, ref_audio=ref_audio, ref_text=ref_text)
+        return _collect(results, self.sample_rate)
 
-        collected = {}
-        for result in results:
-            collected[int(result.sequence_idx)] = (
-                np.array(result.audio),
-                int(getattr(result, "sample_rate", self.sample_rate)),
+    def _generate_design_batch(
+        self,
+        batch: list[str],
+        instruct: str,
+        language: str,
+    ) -> dict[int, tuple[np.ndarray, int]]:
+        kwargs = {
+            "texts": batch,
+            "instructs": [instruct] * len(batch),
+            "lang_code": language,
+            "stream": False,
+            "verbose": False,
+        }
+        try:
+            results = list(self.model.batch_generate(**kwargs))
+            return _collect(results, self.sample_rate)
+        except Exception:
+            return self._generate_one_by_one(batch, language, instruct=instruct)
+
+    def _generate_one_by_one(
+        self,
+        batch: list[str],
+        language: str,
+        *,
+        ref_audio: str | None = None,
+        ref_text: str | None = None,
+        instruct: str | None = None,
+    ) -> dict[int, tuple[np.ndarray, int]]:
+        collected: dict[int, tuple[np.ndarray, int]] = {}
+        for index, text in enumerate(batch):
+            kwargs: dict = {
+                "text": text,
+                "lang_code": language,
+                "stream": False,
+                "verbose": False,
+            }
+            if instruct:
+                kwargs["instruct"] = instruct
+            if ref_audio:
+                kwargs["ref_audio"] = ref_audio
+                kwargs["ref_text"] = ref_text
+            item = list(self.model.generate(**kwargs))[0]
+            collected[index] = (
+                np.array(item.audio),
+                int(getattr(item, "sample_rate", self.sample_rate)),
             )
         return collected
 
 
+def _collect(results, sample_rate: int) -> dict[int, tuple[np.ndarray, int]]:
+    collected: dict[int, tuple[np.ndarray, int]] = {}
+    for result in results:
+        collected[int(result.sequence_idx)] = (
+            np.array(result.audio),
+            int(getattr(result, "sample_rate", sample_rate)),
+        )
+    return collected
+
+
 def _looks_like_model(path: Path) -> bool:
-    return (path / "config.json").exists() and any(path.glob("*.safetensors"))
+    return path.is_dir() and (path / "config.json").exists() and any(path.glob("*.safetensors"))
 
 
 engine = TTSEngine()

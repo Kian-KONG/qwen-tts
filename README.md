@@ -1,8 +1,13 @@
 # Qwen3-TTS 英文视频配音（Apple Silicon / MLX）
 
-面向公司内部英文视频配音。在 **Mac Apple 芯片**（M 系列，本机已在 Mac mini M4 16GB 验证）上用 **Qwen3-TTS 1.7B Base bf16**（Apache 2.0）做声音克隆。React 前端 + Python 后端，推理走 MLX。
+面向公司内部英文视频配音。在 **Mac Apple 芯片**（M 系列，本机已在 Mac mini M4 16GB 验证）上用 **Qwen3-TTS 1.7B bf16**（Apache 2.0）。支持两种音色：
 
-不要用 4bit：输出会乱码。bf16 峰值大约 6GB，16GB 机器够用。
+- **描述音色**（VoiceDesign）：写一段声音描述即可配音，不必上传参考音频
+- **声音克隆**（Base）：3–10 秒参考音频 + 逐字稿
+
+React 前端 + Python 后端，推理走 MLX。16GB 机器同一时间只加载其中一个模型。
+
+不要用 4bit：输出会乱码。bf16 峰值大约 6GB。
 
 下载默认走国内源：ModelScope → hf-mirror，PyPI 清华，npm npmmirror，Homebrew 中科大。
 
@@ -11,6 +16,7 @@
 ```bash
 make setup
 make download
+make download-design
 make start
 ```
 
@@ -23,12 +29,31 @@ make start
 | 命令 | 作用 |
 | --- | --- |
 | `make setup` | Apple Silicon 环境 |
-| `make download` | 拉 bf16 权重（ModelScope / hf-mirror） |
+| `make download` | 拉 Base bf16（声音克隆） |
+| `make download-design` | 拉 VoiceDesign bf16（描述音色） |
 | `make start` | 打包前端并由 FastAPI 提供 |
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |
 | `make tunnel-setup` | 可选：安装 cloudflared |
 | `make tunnel` | 可选：临时公网链接 |
+
+## 描述音色（不用克隆）
+
+先下载 VoiceDesign 权重，然后在界面选「描述音色」，或 API 传 `mode=design` 和 `instruct`：
+
+```bash
+curl http://127.0.0.1:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts-1",
+    "input": "Your English script here.",
+    "mode": "design",
+    "instruct": "A calm adult male narrator, warm mid pitch, clear studio diction.",
+    "language": "English",
+    "response_format": "wav"
+  }' \
+  --output speech.wav
+```
 
 ## 准备参考音频
 

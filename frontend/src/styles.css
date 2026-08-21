@@ -104,8 +104,35 @@ label {
   gap: 8px;
 }
 
-.stack {
-  margin-top: 16px;
+.mode-switch {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
+.mode-switch button.active {
+  background: var(--accent);
+  color: #1a140c;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button.chip {
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+button.chip.on {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 input,
