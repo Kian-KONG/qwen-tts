@@ -51,8 +51,9 @@ https://kian-kong.github.io/qwen-tts/
 2. 本机先 `make start`，另开终端 `make tunnel-named`
 3. 把脚本打印的 **Public API origin** 写进仓库 **Settings → Secrets and variables → Actions → Variables**，变量名 `VITE_API_BASE`（不要末尾斜杠）
 4. 若本机设了 `QWEN_TTS_API_KEY`，再加 Actions Secret `VITE_API_KEY`，值相同
-5. 仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**
-6. 推送到 `qwen-tts` 分支会自动构建并发布
+5. 等 **Actions → Deploy GitHub Pages** 跑绿，会写出 `gh-pages` 分支
+6. 仓库 **Settings → Pages → Build and deployment → Source** 选 **Deploy from a branch**，Branch 选 `gh-pages` / `/ (root)`，保存
+7. 打开 https://kian-kong.github.io/qwen-tts/
 
 Mac 要保持 FastAPI 和命名隧道都在跑。重启电脑后重新 `make start` 和 `make tunnel-named`。临时 quick tunnel 仍可用 `make tunnel`，但地址会变。
 
