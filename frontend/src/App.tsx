@@ -1,47 +1,84 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   createJob,
   createVoice,
   deleteVoice,
   getHealth,
   getJob,
+  listLanguages,
   listVoices,
   type Health,
   type Job,
+  type Language,
   type Voice,
 } from "./api";
 
-const SAMPLE_SCRIPT = `Welcome to this week's product update.
-We shipped faster voice cloning for internal English videos, running entirely on a Mac mini.
-The narration should sound natural, steady, and easy to cut against picture.`;
+const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
+2. We shipped faster voice cloning for internal videos, running entirely on a Mac mini.
+3. The narration should sound natural, steady, and easy to cut against picture.`;
+
+const ITEM_MARK = /^\s*(?:\d{1,3}[\.\)、:：]|\(\d{1,3}\)|\（\d{1,3}\）)\s*/;
+
+function parseMarkdownList(text: string): string[] {
+  const items: string[] = [];
+  let current: string | null = null;
+  let sawMark = false;
+  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+    const match = line.match(ITEM_MARK);
+    if (match) {
+      sawMark = true;
+      if (current?.trim()) items.push(current.trim());
+      current = line.slice(match[0].length);
+      continue;
+    }
+    if (current == null) continue;
+    const extra = line.trim();
+    if (extra) current = `${current.trim()} ${extra}`;
+  }
+  if (current?.trim()) items.push(current.trim());
+  if (sawMark && items.length) return items;
+  return text
+    .split(/\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toMarkdown(items: string[]): string {
+  return items
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item, index) => `${index + 1}. ${item}`)
+    .join("\n");
+}
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
+  const [languages, setLanguages] = useState<Language[]>([]);
+  const [language, setLanguage] = useState("Auto");
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voiceId, setVoiceId] = useState("");
   const [voiceName, setVoiceName] = useState("Studio A");
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refText, setRefText] = useState("");
-  const [script, setScript] = useState(SAMPLE_SCRIPT);
+  const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
   const [batchSize, setBatchSize] = useState(4);
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const chunks = useMemo(
-    () =>
-      script
-        .split(/(?<=[.!?])\s+/)
-        .map((part) => part.trim())
-        .filter(Boolean),
-    [script],
-  );
+  const filledSegments = useMemo(() => parseMarkdownList(markdown), [markdown]);
 
   async function refresh() {
     try {
-      const [nextHealth, nextVoices] = await Promise.all([getHealth(), listVoices()]);
+      const [nextHealth, nextVoices, nextLanguages] = await Promise.all([
+        getHealth(),
+        listVoices(),
+        listLanguages(),
+      ]);
       setHealth(nextHealth);
       setVoices(nextVoices);
+      setLanguages(nextLanguages);
       setVoiceId((current) => current || nextVoices[0]?.id || "");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "无法连接后端");
@@ -63,10 +100,48 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status]);
 
+  function addSegment() {
+    const next = filledSegments.length + 1;
+    setMarkdown((current) => {
+      const trimmed = current.replace(/\s+$/, "");
+      return trimmed ? `${trimmed}\n${next}. ` : `1. `;
+    });
+    window.setTimeout(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.focus();
+      editor.selectionStart = editor.selectionEnd = editor.value.length;
+    }, 0);
+  }
+
+  function tidyNumbers() {
+    setMarkdown(toMarkdown(filledSegments));
+  }
+
+  function onMarkdownKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    const editor = event.currentTarget;
+    const pos = editor.selectionStart;
+    const lineStart = markdown.lastIndexOf("\n", pos - 1) + 1;
+    const line = markdown.slice(lineStart, pos);
+    const match = line.match(/^\s*(\d+)[\.\)、:：]\s+(.*)$/);
+    if (!match) return;
+    event.preventDefault();
+    const nextNum = Number(match[1]) + 1;
+    const insert = match[2].trim() ? `\n${nextNum}. ` : "";
+    if (!insert) return;
+    const next = `${markdown.slice(0, pos)}${insert}${markdown.slice(editor.selectionEnd)}`;
+    setMarkdown(next);
+    const caret = pos + insert.length;
+    window.setTimeout(() => {
+      editor.selectionStart = editor.selectionEnd = caret;
+    }, 0);
+  }
+
   async function onSaveVoice(event: FormEvent) {
     event.preventDefault();
     if (!refFile) {
-      setMessage("请先上传 3–10 秒英文参考音频");
+      setMessage("请先上传 3–10 秒参考音频");
       return;
     }
     setBusy(true);
@@ -89,11 +164,12 @@ export default function App() {
     setMessage("");
     try {
       const next = await createJob({
-        text: script,
+        text: markdown,
         voiceId: voiceId || undefined,
         refAudio: voiceId ? undefined : refFile || undefined,
         refText: voiceId ? undefined : refText,
         batchSize,
+        language,
       });
       setJob(next);
     } catch (error) {
@@ -111,12 +187,13 @@ export default function App() {
   }
 
   const audioUrl = job?.status === "done" ? `/api/jobs/${job.id}/audio` : "";
+  const zipUrl = job?.status === "done" ? job.zip_url : "";
 
   return (
     <div className="page">
       <header className="top">
         <div>
-          <p className="kicker">Internal English Dubbing</p>
+          <p className="kicker">Multilingual Dubbing</p>
           <h1>Qwen3-TTS 配音台</h1>
         </div>
         <div className="status">
@@ -124,7 +201,7 @@ export default function App() {
           <div>
             <strong>{health?.model_id?.split("/").pop() || "等待模型"}</strong>
             <p>
-              {health?.model_loaded ? "已加载" : health?.model_dir_ready ? "权重已就绪" : "未下载"} · batch {batchSize}
+              {health?.model_loaded ? "已加载" : health?.model_dir_ready ? "权重已就绪" : "未下载"} · {language} · batch {batchSize}
             </p>
           </div>
         </div>
@@ -133,7 +210,7 @@ export default function App() {
       <main className="grid">
         <section className="panel">
           <h2>1. 克隆音色</h2>
-          <p className="hint">录一段干净的 3–10 秒英文，44.1 kHz / 24-bit WAV 最佳，并写上逐字稿。</p>
+          <p className="hint">录 3–10 秒干净参考音频，语言尽量和文稿一致，并写上逐字稿。</p>
           <form className="stack" onSubmit={onSaveVoice}>
             <label>
               音色名称
@@ -177,12 +254,19 @@ export default function App() {
         </section>
 
         <section className="panel">
-          <h2>2. 英文文稿</h2>
+          <h2>2. Markdown 文稿</h2>
           <form className="stack" onSubmit={onGenerate}>
-            <textarea rows={12} value={script} onChange={(e) => setScript(e.target.value)} />
-            <div className="row meta">
-              <span>{script.trim().split(/\s+/).filter(Boolean).length} words</span>
-              <span>{chunks.length} sentences</span>
+            <div className="row">
+              <label className="grow">
+                语言
+                <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+                  {languages.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="inline">
                 batch
                 <input
@@ -194,8 +278,36 @@ export default function App() {
                 />
               </label>
             </div>
-            <button type="submit" disabled={busy || !script.trim()}>
-              {busy ? "提交中…" : "分段批量配音"}
+            <p className="hint">用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段。回车会自动下一项；成片仍按编号合并。</p>
+            <textarea
+              ref={editorRef}
+              className="markdown-editor"
+              rows={12}
+              spellCheck={false}
+              value={markdown}
+              onChange={(e) => setMarkdown(e.target.value)}
+              onKeyDown={onMarkdownKeyDown}
+              placeholder={"1. First line.\n2. Second line."}
+            />
+            <ol className="md-preview">
+              {filledSegments.map((item, index) => (
+                <li key={`${index}-${item.slice(0, 24)}`}>
+                  <span>{index + 1}.</span>
+                  <p>{item}</p>
+                </li>
+              ))}
+            </ol>
+            <div className="row meta">
+              <button type="button" className="ghost" onClick={addSegment}>
+                添加一项
+              </button>
+              <button type="button" className="ghost" onClick={tidyNumbers}>
+                整理编号
+              </button>
+              <span>{filledSegments.length} 段</span>
+            </div>
+            <button type="submit" disabled={busy || filledSegments.length === 0}>
+              {busy ? "提交中…" : `分段配音（${filledSegments.length} 段）`}
             </button>
           </form>
         </section>
@@ -203,8 +315,8 @@ export default function App() {
 
       <section className="panel playback">
         <div>
-          <h2>3. 成片音频</h2>
-          <p className="hint">长文本按句切分后 batch=4 合成，再拼成 44.1 kHz / 24-bit WAV，方便导入剪辑软件。</p>
+          <h2>3. 分段成片</h2>
+          <p className="hint">编号对应单段 WAV，完整轨是按编号顺序拼起来的结果。</p>
         </div>
         {job ? (
           <div className="job">
@@ -213,7 +325,7 @@ export default function App() {
             </div>
             <p>
               {job.status === "done"
-                ? `完成 · ${job.audio_sec}s 音频 · 耗时 ${job.elapsed_sec}s · RTF ${job.rtf}`
+                ? `完成 · ${job.segments?.length || job.chunks} 段 · ${job.audio_sec}s · 耗时 ${job.elapsed_sec}s · RTF ${job.rtf}`
                 : job.status === "error"
                   ? job.error
                   : `${job.status} · ${Math.round((job.progress || 0) * 100)}%`}
@@ -222,13 +334,34 @@ export default function App() {
               <div className="player">
                 <audio controls src={audioUrl} />
                 <a className="button" href={audioUrl} download={`${job.id}.wav`}>
-                  下载 WAV
+                  完整轨
                 </a>
+                {zipUrl ? (
+                  <a className="button ghost" href={zipUrl} download={`${job.id}.zip`}>
+                    打包分段
+                  </a>
+                ) : null}
               </div>
+            ) : null}
+            {job.status === "done" && job.segments?.length ? (
+              <ol className="clips">
+                {job.segments.map((segment) => (
+                  <li key={segment.index}>
+                    <div>
+                      <strong>{segment.index}.</strong>
+                      <p>{segment.text}</p>
+                    </div>
+                    <audio controls src={segment.url} />
+                    <a href={segment.url} download={`${job.id}_${String(segment.index).padStart(3, "0")}.wav`}>
+                      下载
+                    </a>
+                  </li>
+                ))}
+              </ol>
             ) : null}
           </div>
         ) : (
-          <p className="hint">生成结果会显示在这里。</p>
+          <p className="hint">生成结果会按编号显示在这里。</p>
         )}
         {message ? <p className="flash">{message}</p> : null}
       </section>

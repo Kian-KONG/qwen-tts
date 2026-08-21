@@ -181,6 +181,83 @@ button:disabled {
   width: 64px;
 }
 
+.grow {
+  flex: 1;
+}
+
+.markdown-editor {
+  min-height: 220px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.md-preview {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.md-preview li {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #141310;
+  border: 1px solid #2f2b24;
+}
+
+.md-preview span {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.md-preview p {
+  margin: 0;
+}
+
+.clips {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.clips li {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: #141310;
+  border: 1px solid #2f2b24;
+}
+
+.clips li strong {
+  color: var(--accent);
+  margin-right: 8px;
+}
+
+.clips li p {
+  margin: 6px 0 0;
+}
+
+.clips audio {
+  width: 100%;
+}
+
+.button.ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
 .playback {
   margin-top: 18px;
   display: grid;

@@ -6,13 +6,35 @@ export type Voice = {
   created_at?: string;
 };
 
+export type Language = {
+  id: string;
+  label: string;
+  lang_code: string;
+};
+
+export type PreviewSegment = {
+  index: number;
+  text: string;
+  chars: number;
+};
+
+export type JobSegment = {
+  index: number;
+  text: string;
+  duration_sec?: number | null;
+  url: string;
+};
+
 export type Job = {
   id: string;
   status: "queued" | "running" | "done" | "error" | string;
   progress: number;
   error?: string | null;
   download_url?: string | null;
+  zip_url?: string | null;
+  segments?: JobSegment[];
   chunks?: number;
+  language?: string;
   batch_size?: number;
   elapsed_sec?: number;
   audio_sec?: number;
@@ -26,6 +48,7 @@ export type Health = {
   model_loaded: boolean;
   model_dir_ready: boolean;
   batch_size: number;
+  languages?: Language[];
 };
 
 async function parseError(res: Response): Promise<string> {
@@ -41,6 +64,24 @@ export async function getHealth(): Promise<Health> {
   const res = await fetch("/health");
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
+}
+
+export async function listLanguages(): Promise<Language[]> {
+  const res = await fetch("/api/languages");
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return data.data ?? [];
+}
+
+export async function previewSplit(text: string, language: string): Promise<PreviewSegment[]> {
+  const res = await fetch("/api/split", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, language }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return data.segments ?? [];
 }
 
 export async function listVoices(): Promise<Voice[]> {
@@ -71,11 +112,12 @@ export async function createJob(opts: {
   refAudio?: File;
   refText?: string;
   batchSize: number;
+  language: string;
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
   body.set("batch_size", String(opts.batchSize));
-  body.set("language", "English");
+  body.set("language", opts.language);
   if (opts.voiceId) body.set("voice_id", opts.voiceId);
   if (opts.refAudio) body.set("ref_audio", opts.refAudio);
   if (opts.refText) body.set("ref_text", opts.refText);

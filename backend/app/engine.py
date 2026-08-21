@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from . import audio_util, chunking
-from .config import BATCH_SIZE, GAP_MS, LANGUAGE, MAX_CHUNK_CHARS, MODEL_DIR, MODEL_ID, OUTPUT_DIR
+from .config import BATCH_SIZE, GAP_MS, LANGUAGE, LANGUAGE_BY_ID, MODEL_DIR, MODEL_ID, OUTPUT_DIR
 
 
 class TTSEngine:
@@ -42,7 +42,9 @@ class TTSEngine:
     ) -> dict:
         if not self.loaded:
             self.load()
-        chunks = chunking.split_script(text, MAX_CHUNK_CHARS)
+        lang = LANGUAGE_BY_ID.get(language, LANGUAGE_BY_ID["Auto"])
+        lang_code = lang["lang_code"]
+        chunks = chunking.split_script(text, language)
         if not chunks:
             raise ValueError("Script is empty after splitting")
         if not ref_audio or not Path(ref_audio).exists():
@@ -58,7 +60,7 @@ class TTSEngine:
         with self.lock:
             for offset in range(0, len(chunks), batch_size):
                 batch = chunks[offset : offset + batch_size]
-                collected = self._generate_batch(batch, ref_audio, ref_text.strip(), language)
+                collected = self._generate_batch(batch, ref_audio, ref_text.strip(), lang_code)
                 for index in range(len(batch)):
                     if index not in collected:
                         raise RuntimeError(f"Missing audio for chunk {offset + index}")
@@ -68,26 +70,46 @@ class TTSEngine:
                 if progress_cb:
                     progress_cb(min(1.0, (offset + len(batch)) / len(chunks)))
 
+        stem = job_id or time.strftime("%Y%m%d-%H%M%S")
+        segment_dir = OUTPUT_DIR / stem
+        segments = []
+        for index, (chunk, wav) in enumerate(zip(chunks, wavs), start=1):
+            raw_path = segment_dir / f"seg_{index:03d}.raw.wav"
+            out_seg = segment_dir / f"seg_{index:03d}.wav"
+            audio_util.write_wav(raw_path, wav, native_sr)
+            audio_util.resample_for_video(raw_path, out_seg)
+            raw_path.unlink(missing_ok=True)
+            duration = float(wav.size) / float(native_sr) if native_sr else 0.0
+            segments.append(
+                {
+                    "index": index,
+                    "text": chunk,
+                    "duration_sec": round(duration, 2),
+                    "path": str(out_seg),
+                }
+            )
+
         audio = audio_util.concat_with_gap(wavs, native_sr, GAP_MS)
         elapsed = time.perf_counter() - started
         duration = float(audio.size) / float(native_sr) if native_sr else 0.0
-        stem = job_id or time.strftime("%Y%m%d-%H%M%S")
-        raw_path = OUTPUT_DIR / f"{stem}.raw.wav"
-        out_path = OUTPUT_DIR / f"{stem}.wav"
+        raw_path = segment_dir / "full.raw.wav"
+        out_path = segment_dir / "full.wav"
         audio_util.write_wav(raw_path, audio, native_sr)
         audio_util.resample_for_video(raw_path, out_path)
         raw_path.unlink(missing_ok=True)
 
         stats = {
             "chunks": len(chunks),
+            "language": language,
             "batch_size": batch_size,
             "elapsed_sec": round(elapsed, 2),
             "audio_sec": round(duration, 2),
             "rtf": round(elapsed / duration, 3) if duration else None,
             "sample_rate": native_sr,
             "output_path": str(out_path),
+            "segments": segments,
         }
-        self.last_stats = stats
+        self.last_stats = {key: value for key, value in stats.items() if key != "segments"}
         return stats
 
     def _generate_batch(

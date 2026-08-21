@@ -21,7 +21,7 @@ class Job:
     ref_audio: str = ""
     ref_text: str = ""
     batch_size: int = 4
-    language: str = "English"
+    language: str = "Auto"
 
 
 class JobRunner:
@@ -79,7 +79,19 @@ runner = JobRunner()
 
 
 def public_job(job: Job) -> dict:
+    stats = dict(job.stats)
+    raw_segments = stats.pop("segments", []) or []
+    segments = [
+        {
+            "index": item["index"],
+            "text": item["text"],
+            "duration_sec": item.get("duration_sec"),
+            "url": f"/api/jobs/{job.id}/segments/{item['index']}/audio",
+        }
+        for item in raw_segments
+    ]
     download = f"/api/jobs/{job.id}/audio" if job.status == "done" else None
+    zip_url = f"/api/jobs/{job.id}/zip" if job.status == "done" and segments else None
     return {
         "id": job.id,
         "status": job.status,
@@ -87,5 +99,7 @@ def public_job(job: Job) -> dict:
         "error": job.error,
         "created_at": job.created_at,
         "download_url": download,
-        **job.stats,
+        "zip_url": zip_url,
+        "segments": segments,
+        **stats,
     }

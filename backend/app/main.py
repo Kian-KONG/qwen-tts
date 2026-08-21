@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import io
 import tempfile
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -17,10 +19,12 @@ from .config import (
     BATCH_SIZE,
     FRONTEND_DIST,
     LANGUAGE,
+    LANGUAGES,
+    LANGUAGE_BY_ID,
     MODEL_DIR,
     MODEL_ID,
-    OUTPUT_DIR,
 )
+from .chunking import preview_segments
 from .engine import engine
 from .jobs import public_job, runner
 
@@ -64,6 +68,18 @@ class SpeechRequest(BaseModel):
     batch_size: int = BATCH_SIZE
 
 
+class SplitRequest(BaseModel):
+    text: str
+    language: str = LANGUAGE
+
+
+def _normalize_language(language: str | None) -> str:
+    value = (language or LANGUAGE).strip() or LANGUAGE
+    if value not in LANGUAGE_BY_ID:
+        raise HTTPException(status_code=400, detail=f"Unsupported language: {value}")
+    return value
+
+
 class JobRequest(BaseModel):
     text: str
     voice_id: Optional[str] = None
@@ -100,6 +116,7 @@ def health():
         "model_loaded": engine.loaded,
         "model_dir_ready": (MODEL_DIR / "config.json").exists(),
         "batch_size": BATCH_SIZE,
+        "languages": LANGUAGES,
         "last_stats": engine.last_stats,
     }
 
@@ -122,6 +139,18 @@ def list_models():
 @app.get("/api/voices")
 def api_voices():
     return {"data": voices.list_voices()}
+
+
+@app.get("/api/languages")
+def api_languages():
+    return {"data": LANGUAGES, "default": LANGUAGE}
+
+
+@app.post("/api/split")
+def api_split(payload: SplitRequest):
+    language = _normalize_language(payload.language)
+    segments = preview_segments(payload.text, language)
+    return {"language": language, "count": len(segments), "segments": segments}
 
 
 @app.post("/api/voices")
@@ -178,7 +207,7 @@ async def api_create_job(
             ref_audio=audio_path,
             ref_text=transcript,
             batch_size=batch_size,
-            language=language,
+            language=_normalize_language(language),
         )
         return public_job(job)
     except KeyError:
@@ -204,7 +233,7 @@ def api_create_job_json(payload: JobRequest):
         ref_audio=audio_path,
         ref_text=transcript,
         batch_size=payload.batch_size,
-        language=payload.language,
+        language=_normalize_language(payload.language),
     )
     return public_job(job)
 
@@ -229,6 +258,46 @@ def api_job_audio(job_id: str):
     return FileResponse(path, media_type="audio/wav", filename=f"{job_id}.wav")
 
 
+@app.get("/api/jobs/{job_id}/segments/{index}/audio")
+def api_job_segment_audio(job_id: str, index: int):
+    try:
+        job = runner.get(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "done":
+        raise HTTPException(status_code=409, detail="Audio is not ready")
+    for item in job.stats.get("segments") or []:
+        if int(item["index"]) == index:
+            path = Path(item["path"])
+            return FileResponse(path, media_type="audio/wav", filename=f"{job_id}_{index:03d}.wav")
+    raise HTTPException(status_code=404, detail="Segment not found")
+
+
+@app.get("/api/jobs/{job_id}/zip")
+def api_job_zip(job_id: str):
+    try:
+        job = runner.get(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "done":
+        raise HTTPException(status_code=409, detail="Audio is not ready")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        full = job.stats.get("output_path")
+        if full:
+            archive.write(full, f"{job_id}/full.wav")
+        for item in job.stats.get("segments") or []:
+            path = Path(item["path"])
+            if path.exists():
+                archive.write(path, f"{job_id}/seg_{int(item['index']):03d}.wav")
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{job_id}.zip"'},
+    )
+
+
 @app.post("/v1/audio/speech")
 def openai_speech(payload: SpeechRequest, authorization: Optional[str] = Header(None)):
     _check_key(authorization)
@@ -241,7 +310,7 @@ def openai_speech(payload: SpeechRequest, authorization: Optional[str] = Header(
             ref_audio,
             ref_text,
             batch_size=payload.batch_size,
-            language=payload.language,
+            language=_normalize_language(payload.language),
         )
         from .audio_util import convert_format
 
@@ -279,7 +348,7 @@ async def openai_clone(
             str(tmp_path),
             ref_text,
             batch_size=batch_size,
-            language=language,
+            language=_normalize_language(language),
         )
         from .audio_util import convert_format
 

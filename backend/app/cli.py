@@ -34,7 +34,7 @@ def main() -> None:
     else:
         parser.error("Provide --ref-text or --ref-text-file")
 
-    chunks = split_script(text)
+    chunks = split_script(text, args.language)
     print(f"Chunks: {len(chunks)}")
     if args.preview_chunks:
         for i, chunk in enumerate(chunks, 1):
