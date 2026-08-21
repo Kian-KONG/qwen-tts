@@ -1,0 +1,11 @@
+mlx-audio>=0.3.0
+misaki
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.18
+soundfile>=0.13.0
+numpy>=1.26.0
+huggingface_hub>=0.26.0
+modelscope>=1.22.0
+pydantic>=2.9.0
+imageio-ffmpeg>=0.5.1

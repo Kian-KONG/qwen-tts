@@ -1,0 +1,4 @@
+Welcome to this week's product update.
+We shipped faster voice cloning for internal English videos, running entirely on a Mac mini.
+The narration should sound natural, steady, and easy to cut against picture.
+If a sentence feels too long, split it before generating so the batch job stays even.
