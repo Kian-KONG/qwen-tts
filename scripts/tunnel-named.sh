@@ -8,6 +8,7 @@ source "$ROOT/scripts/mirrors.sh"
 PORT="${QWEN_TTS_PORT:-8000}"
 NAME="${QWEN_TTS_TUNNEL_NAME:-qwen-tts}"
 CF_DIR="${HOME}/.cloudflared"
+TOKEN_FILE="${CF_DIR}/${NAME}.token"
 CONFIG="${CF_DIR}/${NAME}.yml"
 ID_FILE="${CF_DIR}/${NAME}.id"
 
@@ -16,14 +17,36 @@ if ! command -v cloudflared >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -f "${CF_DIR}/cert.pem" ]]; then
-  echo "Named tunnels need a Cloudflare account (one-time browser login):"
-  echo "  cloudflared tunnel login"
-  echo "Then rerun: make tunnel-named"
-  exit 1
+mkdir -p "$CF_DIR"
+
+# Remotely managed tunnel (Cloudflare dashboard token). Prefer this when present.
+if [[ -f "$ROOT/.env" ]]; then
+  # shellcheck disable=SC1091
+  set -a
+  source "$ROOT/.env"
+  set +a
+fi
+TOKEN="${QWEN_TTS_TUNNEL_TOKEN:-${CLOUDFLARE_TUNNEL_TOKEN:-}}"
+if [[ -z "$TOKEN" && -f "$TOKEN_FILE" ]]; then
+  TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
 fi
 
-mkdir -p "$CF_DIR"
+if [[ -n "$TOKEN" ]]; then
+  printf '%s\n' "$TOKEN" > "$TOKEN_FILE"
+  chmod 600 "$TOKEN_FILE"
+  echo "Connecting named tunnel with dashboard token"
+  echo "Public hostname and service URL are set in Cloudflare Zero Trust."
+  echo "Service should target http://127.0.0.1:${PORT} on this Mac."
+  echo "Keep this process running (and rerun after reboot)."
+  exec cloudflared tunnel --no-autoupdate --protocol http2 run --token "$TOKEN"
+fi
+
+if [[ ! -f "${CF_DIR}/cert.pem" ]]; then
+  echo "No tunnel token found. Either:"
+  echo "  export QWEN_TTS_TUNNEL_TOKEN='...'   # from Cloudflare Zero Trust"
+  echo "  or run: cloudflared tunnel login && make tunnel-named"
+  exit 1
+fi
 
 tunnel_id_from_list() {
   cloudflared tunnel list 2>/dev/null | awk -v name="$NAME" '$2 == name { print $1; exit }'
