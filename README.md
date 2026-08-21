@@ -24,7 +24,7 @@ make start
 
 然后打开 http://127.0.0.1:8000
 
-`make setup` 会装 Python 3.12 虚拟环境、`mlx-audio` 和 `ffmpeg`。Cloudflare Tunnel **不是必需项**，本机或局域网直接用 `:8000` 即可。
+`make setup` 会装 Python 3.12 虚拟环境、`mlx-audio` 和 `ffmpeg`。公网访问用 GitHub Pages + 命名隧道；本机或局域网直接用 `:8000`。临时 trycloudflare **不是必需项**。
 
 ## 常用命令
 
@@ -38,7 +38,31 @@ make start
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |
 | `make tunnel-setup` | 可选：安装 cloudflared |
-| `make tunnel` | 可选：临时公网链接 |
+| `make tunnel-named` | 固定 Cloudflare 命名隧道（需登录） |
+| `make tunnel` | 可选：临时 trycloudflare 链接 |
+
+## GitHub Pages + 命名隧道
+
+GitHub Pages 只托管静态页面，推理仍在这台 Mac。页面地址：
+
+https://kian-kong.github.io/qwen-tts/
+
+1. 浏览器登录一次：`cloudflared tunnel login`
+2. 本机先 `make start`，另开终端 `make tunnel-named`
+3. 把脚本打印的 **Public API origin** 写进仓库 **Settings → Secrets and variables → Actions → Variables**，变量名 `VITE_API_BASE`（不要末尾斜杠）
+4. 若本机设了 `QWEN_TTS_API_KEY`，再加 Actions Secret `VITE_API_KEY`，值相同
+5. 仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**
+6. 推送到 `qwen-tts` 分支会自动构建并发布
+
+Mac 要保持 FastAPI 和命名隧道都在跑。重启电脑后重新 `make start` 和 `make tunnel-named`。临时 quick tunnel 仍可用 `make tunnel`，但地址会变。
+
+如果 `*.cfargotunnel.com` 打不开，到 Cloudflare Zero Trust 给这条隧道加 Public Hostname，或：
+
+```bash
+cloudflared tunnel route dns qwen-tts <子域.你的域名>
+```
+
+然后把 `VITE_API_BASE` 改成那个 `https://...` 再推一次。
 
 ## 预设说话人（默认）
 

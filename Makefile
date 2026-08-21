@@ -10,7 +10,7 @@ export NPM_CONFIG_REGISTRY ?= https://registry.npmmirror.com
 export HF_ENDPOINT ?= https://hf-mirror.com
 export HF_MIRROR ?= https://hf-mirror.com
 
-.PHONY: help setup download download-design download-custom start dev tunnel tunnel-setup health
+.PHONY: help setup download download-design download-custom start dev tunnel tunnel-named tunnel-setup health
 
 help:
 	@echo "Apple Silicon / MLX targets:"
@@ -22,7 +22,8 @@ help:
 	@echo "  make dev           Backend + Vite hot reload"
 	@echo "  make health        GET /health"
 	@echo "  make tunnel-setup  Optional: install cloudflared"
-	@echo "  make tunnel        Optional: temporary Cloudflare public URL"
+	@echo "  make tunnel-named  Stable Cloudflare named tunnel (needs login)"
+	@echo "  make tunnel        Optional: temporary trycloudflare URL"
 
 setup:
 	./scripts/setup.sh
@@ -50,3 +51,6 @@ tunnel-setup:
 
 tunnel:
 	./scripts/tunnel.sh
+
+tunnel-named:
+	./scripts/tunnel-named.sh

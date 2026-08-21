@@ -1,5 +1,6 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  apiUrl,
   createJob,
   createVoice,
   deleteVoice,
@@ -218,8 +219,8 @@ export default function App() {
     await refresh();
   }
 
-  const audioUrl = job?.status === "done" ? `/api/jobs/${job.id}/audio` : "";
-  const zipUrl = job?.status === "done" ? job.zip_url : "";
+  const audioUrl = job?.status === "done" ? job.download_url || apiUrl(`/api/jobs/${job.id}/audio`) : "";
+  const zipUrl = job?.status === "done" ? job.zip_url || "" : "";
 
   return (
     <div className="page">

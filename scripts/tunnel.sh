@@ -16,4 +16,5 @@ fi
 
 echo "Opening a temporary Cloudflare Tunnel to http://127.0.0.1:${PORT}"
 echo "Keep this process running while you share the URL."
-exec cloudflared tunnel --url "http://127.0.0.1:${PORT}"
+# QUIC is often blocked or flaky in China; http2 is more reliable for quick tunnels.
+exec cloudflared tunnel --protocol http2 --url "http://127.0.0.1:${PORT}"
