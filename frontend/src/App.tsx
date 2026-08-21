@@ -6,10 +6,12 @@ import {
   getHealth,
   getJob,
   listLanguages,
+  listSpeakers,
   listVoices,
   type Health,
   type Job,
   type Language,
+  type Speaker,
   type Voice,
 } from "./api";
 
@@ -75,10 +77,13 @@ export default function App() {
   const [languages, setLanguages] = useState<Language[]>([]);
   const [language, setLanguage] = useState("Auto");
   const [voices, setVoices] = useState<Voice[]>([]);
+  const [speakers, setSpeakers] = useState<Speaker[]>([]);
+  const [speaker, setSpeaker] = useState("Ryan");
   const [voiceId, setVoiceId] = useState("");
   const [voiceName, setVoiceName] = useState("Studio A");
-  const [voiceMode, setVoiceMode] = useState<"design" | "clone">("design");
+  const [voiceMode, setVoiceMode] = useState<"preset" | "design" | "clone">("preset");
   const [instruct, setInstruct] = useState(VOICE_PRESETS[0].text);
+  const [styleInstruct, setStyleInstruct] = useState("");
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refText, setRefText] = useState("");
   const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
@@ -92,14 +97,17 @@ export default function App() {
 
   async function refresh() {
     try {
-      const [nextHealth, nextVoices, nextLanguages] = await Promise.all([
+      const [nextHealth, nextVoices, nextLanguages, nextSpeakers] = await Promise.all([
         getHealth(),
         listVoices(),
         listLanguages(),
+        listSpeakers(),
       ]);
       setHealth(nextHealth);
       setVoices(nextVoices);
       setLanguages(nextLanguages);
+      setSpeakers(nextSpeakers.data);
+      setSpeaker((current) => current || nextSpeakers.default || "Ryan");
       setVoiceId((current) => current || nextVoices[0]?.id || "");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "无法连接后端");
@@ -187,7 +195,8 @@ export default function App() {
       const next = await createJob({
         text: markdown,
         mode: voiceMode,
-        instruct: voiceMode === "design" ? instruct : undefined,
+        speaker: voiceMode === "preset" ? speaker : undefined,
+        instruct: voiceMode === "design" ? instruct : voiceMode === "preset" ? styleInstruct || undefined : undefined,
         voiceId: voiceMode === "clone" ? voiceId || undefined : undefined,
         refAudio: voiceMode === "clone" && !voiceId ? refFile || undefined : undefined,
         refText: voiceMode === "clone" && !voiceId ? refText : undefined,
@@ -223,12 +232,17 @@ export default function App() {
           <span className={health?.model_loaded || health?.model_dir_ready ? "dot on" : "dot"} />
           <div>
             <strong>
-              {(health?.current_mode === "design" ? health?.design_model_id : health?.model_id)?.split("/").pop() ||
-                "等待模型"}
+              {(health?.current_mode === "design"
+                ? health?.design_model_id
+                : health?.current_mode === "preset"
+                  ? health?.custom_model_id
+                  : health?.model_id
+              )?.split("/").pop() || "等待模型"}
             </strong>
             <p>
-              {health?.model_loaded ? "已加载" : health?.model_dir_ready ? "权重已就绪" : "未下载"}
-              {health?.design_model_ready ? " · 描述音色可用" : " · 描述音色未下载"} · {language} · batch {batchSize}
+              {health?.model_loaded ? "已加载" : "未加载"}
+              {health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}
+              {health?.design_model_ready ? " · 描述可用" : " · 描述未下载"} · {language} · batch {batchSize}
             </p>
           </div>
         </div>
@@ -238,6 +252,9 @@ export default function App() {
         <section className="panel">
           <h2>1. 音色</h2>
           <div className="mode-switch">
+            <button type="button" className={voiceMode === "preset" ? "active" : "ghost"} onClick={() => setVoiceMode("preset")}>
+              预设说话人
+            </button>
             <button type="button" className={voiceMode === "design" ? "active" : "ghost"} onClick={() => setVoiceMode("design")}>
               描述音色
             </button>
@@ -245,7 +262,38 @@ export default function App() {
               声音克隆
             </button>
           </div>
-          {voiceMode === "design" ? (
+          {voiceMode === "preset" ? (
+            <div className="stack">
+              <p className="hint">
+                点选官方音色后直接配音，不用写描述也不用上传参考音频。
+                {health?.custom_model_ready ? "" : " 当前还没下载 CustomVoice 权重，请先运行 `make download-custom`。"}
+              </p>
+              <div className="speaker-grid">
+                {speakers.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={speaker === item.id ? "speaker on" : "speaker"}
+                    onClick={() => setSpeaker(item.id)}
+                  >
+                    {item.label}
+                    <small>
+                      {item.native}
+                      {item.description ? ` · ${item.description}` : ""}
+                    </small>
+                  </button>
+                ))}
+              </div>
+              <label>
+                语气（可选）
+                <input
+                  value={styleInstruct}
+                  onChange={(e) => setStyleInstruct(e.target.value)}
+                  placeholder="Very happy and excited."
+                />
+              </label>
+            </div>
+          ) : voiceMode === "design" ? (
             <div className="stack">
               <p className="hint">
                 不用上传参考音频。用一段话描述年龄、性别、口音和气质即可直接配音。
@@ -378,6 +426,7 @@ export default function App() {
               disabled={
                 busy ||
                 filledSegments.length === 0 ||
+                (voiceMode === "preset" && (!speaker || health?.custom_model_ready === false)) ||
                 (voiceMode === "design" && (!instruct.trim() || health?.design_model_ready === false)) ||
                 (voiceMode === "clone" && !voiceId && (!refFile || !refText.trim()))
               }

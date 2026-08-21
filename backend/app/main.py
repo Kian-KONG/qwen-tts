@@ -17,6 +17,9 @@ from . import voices
 from .config import (
     API_KEY,
     BATCH_SIZE,
+    CUSTOM_MODEL_DIR,
+    CUSTOM_MODEL_ID,
+    DEFAULT_SPEAKER,
     DESIGN_MODEL_DIR,
     DESIGN_MODEL_ID,
     FRONTEND_DIST,
@@ -25,6 +28,8 @@ from .config import (
     LANGUAGE_BY_ID,
     MODEL_DIR,
     MODEL_ID,
+    SPEAKER_BY_ID,
+    SPEAKERS,
 )
 from .chunking import preview_segments
 from .engine import engine
@@ -42,7 +47,7 @@ def _check_key(authorization: Optional[str]) -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     try:
-        engine.load()
+        engine.load("preset")
     except Exception as exc:
         print(f"[qwen-tts] model will load on first request: {exc}")
     yield
@@ -69,7 +74,8 @@ class SpeechRequest(BaseModel):
     language: str = LANGUAGE
     batch_size: int = BATCH_SIZE
     instruct: Optional[str] = None
-    mode: str = "clone"
+    mode: str = "preset"
+    speaker: Optional[str] = None
 
 
 class SplitRequest(BaseModel):
@@ -78,12 +84,29 @@ class SplitRequest(BaseModel):
 
 
 def _normalize_mode(mode: str | None) -> str:
-    value = (mode or "clone").strip().lower()
+    value = (mode or "preset").strip().lower()
     if value in {"design", "voice_design", "describe", "description"}:
         return "design"
+    if value in {"preset", "custom", "custom_voice"}:
+        return "preset"
     if value in {"clone", "base", "icl"}:
         return "clone"
     raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
+
+
+def _normalize_speaker(speaker: str | None) -> str:
+    value = (speaker or DEFAULT_SPEAKER).strip()
+    if value not in SPEAKER_BY_ID:
+        raise HTTPException(status_code=400, detail=f"Unknown speaker: {speaker}")
+    return value
+
+
+def _current_model_id() -> str:
+    if engine.mode == "design":
+        return DESIGN_MODEL_ID
+    if engine.mode == "preset":
+        return CUSTOM_MODEL_ID
+    return MODEL_ID
 
 
 def _looks_like_model(path: Path) -> bool:
@@ -104,8 +127,9 @@ class JobRequest(BaseModel):
     ref_text: Optional[str] = None
     batch_size: int = Field(default=BATCH_SIZE, ge=1, le=8)
     language: str = LANGUAGE
-    mode: str = "clone"
+    mode: str = "preset"
     instruct: Optional[str] = None
+    speaker: Optional[str] = None
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -130,13 +154,16 @@ def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Opt
 def health():
     return {
         "ok": True,
-        "model_id": MODEL_ID if engine.mode != "design" else DESIGN_MODEL_ID,
+        "model_id": _current_model_id(),
         "model_path": engine.model_path,
         "model_loaded": engine.loaded,
         "model_dir_ready": _looks_like_model(MODEL_DIR),
         "design_model_id": DESIGN_MODEL_ID,
         "design_model_ready": _looks_like_model(DESIGN_MODEL_DIR),
+        "custom_model_id": CUSTOM_MODEL_ID,
+        "custom_model_ready": _looks_like_model(CUSTOM_MODEL_DIR),
         "current_mode": engine.mode,
+        "default_speaker": DEFAULT_SPEAKER,
         "batch_size": BATCH_SIZE,
         "languages": LANGUAGES,
         "last_stats": engine.last_stats,
@@ -161,6 +188,11 @@ def list_models():
 @app.get("/api/voices")
 def api_voices():
     return {"data": voices.list_voices()}
+
+
+@app.get("/api/speakers")
+def api_speakers():
+    return {"data": SPEAKERS, "default": DEFAULT_SPEAKER}
 
 
 @app.get("/api/languages")
@@ -207,8 +239,9 @@ async def api_create_job(
     ref_text: Optional[str] = Form(None),
     batch_size: int = Form(BATCH_SIZE),
     language: str = Form(LANGUAGE),
-    mode: str = Form("clone"),
+    mode: str = Form("preset"),
     instruct: Optional[str] = Form(None),
+    speaker: Optional[str] = Form(None),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
@@ -216,9 +249,13 @@ async def api_create_job(
 
     job_mode = _normalize_mode(mode)
     description = (instruct or "").strip()
+    speaker_id = ""
     temp_ref: Optional[Path] = None
     try:
-        if job_mode == "design":
+        if job_mode == "preset":
+            speaker_id = _normalize_speaker(speaker or voice_id)
+            audio_path, transcript = "", ""
+        elif job_mode == "design":
             if not description:
                 raise HTTPException(status_code=400, detail="instruct is required for described voices")
             audio_path, transcript = "", ""
@@ -240,6 +277,7 @@ async def api_create_job(
             language=_normalize_language(language),
             mode=job_mode,
             instruct=description,
+            speaker=speaker_id,
         )
         return public_job(job)
     except KeyError:
@@ -258,8 +296,12 @@ async def api_create_job(
 def api_create_job_json(payload: JobRequest):
     job_mode = _normalize_mode(payload.mode)
     description = (payload.instruct or "").strip()
+    speaker_id = ""
     try:
-        if job_mode == "design":
+        if job_mode == "preset":
+            speaker_id = _normalize_speaker(payload.speaker or payload.voice_id)
+            audio_path, transcript = "", ""
+        elif job_mode == "design":
             if not description:
                 raise HTTPException(status_code=400, detail="instruct is required for described voices")
             audio_path, transcript = "", ""
@@ -275,6 +317,7 @@ def api_create_job_json(payload: JobRequest):
         language=_normalize_language(payload.language),
         mode=job_mode,
         instruct=description,
+        speaker=speaker_id,
     )
     return public_job(job)
 
@@ -347,7 +390,14 @@ def openai_speech(payload: SpeechRequest, authorization: Optional[str] = Header(
     try:
         job_mode = _normalize_mode(payload.mode)
         description = (payload.instruct or "").strip()
-        if job_mode == "design" or (description and not payload.ref_audio and not payload.voice):
+        named = payload.speaker or payload.voice
+        if named in SPEAKER_BY_ID and job_mode == "clone" and not payload.ref_audio:
+            job_mode = "preset"
+        speaker_id = ""
+        if job_mode == "preset":
+            speaker_id = _normalize_speaker(named)
+            ref_audio, ref_text = "", ""
+        elif job_mode == "design" or (description and not payload.ref_audio and not payload.voice):
             job_mode = "design"
             if not description:
                 raise HTTPException(status_code=400, detail="instruct is required for described voices")
@@ -362,6 +412,7 @@ def openai_speech(payload: SpeechRequest, authorization: Optional[str] = Header(
             language=_normalize_language(payload.language),
             mode=job_mode,
             instruct=description,
+            speaker=speaker_id,
         )
         from .audio_util import convert_format
 
@@ -400,6 +451,7 @@ async def openai_clone(
             ref_text,
             batch_size=batch_size,
             language=_normalize_language(language),
+            mode="clone",
         )
         from .audio_util import convert_format
 

@@ -9,6 +9,8 @@ import numpy as np
 from . import audio_util, chunking
 from .config import (
     BATCH_SIZE,
+    CUSTOM_MODEL_DIR,
+    DEFAULT_SPEAKER,
     DESIGN_MODEL_DIR,
     GAP_MS,
     LANGUAGE,
@@ -16,7 +18,17 @@ from .config import (
     MODEL_DIR,
     MODEL_ID,
     OUTPUT_DIR,
+    SPEAKER_BY_ID,
 )
+
+
+def normalize_engine_mode(mode: str | None) -> str:
+    value = (mode or "preset").strip().lower()
+    if value in {"design", "voice_design", "describe", "description"}:
+        return "design"
+    if value in {"preset", "custom", "custom_voice"}:
+        return "preset"
+    return "clone"
 
 
 class TTSEngine:
@@ -25,16 +37,16 @@ class TTSEngine:
         self.sample_rate = 24000
         self.lock = threading.Lock()
         self.loaded = False
-        self.mode = "clone"
-        self.model_path = str(MODEL_DIR if _looks_like_model(MODEL_DIR) else MODEL_ID)
+        self.mode = "preset"
+        self.model_path = str(CUSTOM_MODEL_DIR if _looks_like_model(CUSTOM_MODEL_DIR) else MODEL_ID)
         self.last_stats: dict = {}
 
-    def load(self, mode: str = "clone") -> None:
+    def load(self, mode: str = "preset") -> None:
         with self.lock:
             self._load_unlocked(mode)
 
     def _load_unlocked(self, mode: str) -> None:
-        mode = "design" if mode == "design" else "clone"
+        mode = normalize_engine_mode(mode)
         if self.loaded and self.mode == mode and self.model is not None:
             return
         from mlx_audio.tts.utils import load_model
@@ -51,6 +63,12 @@ class TTSEngine:
                     "VoiceDesign model is missing. Run: make download-design"
                 )
             path = DESIGN_MODEL_DIR
+        elif mode == "preset":
+            if not _looks_like_model(CUSTOM_MODEL_DIR):
+                raise FileNotFoundError(
+                    "CustomVoice model is missing. Run: make download-custom"
+                )
+            path = CUSTOM_MODEL_DIR
         else:
             path = MODEL_DIR if _looks_like_model(MODEL_DIR) else MODEL_ID
         self.model_path = str(path)
@@ -68,19 +86,24 @@ class TTSEngine:
         batch_size: int = BATCH_SIZE,
         language: str = LANGUAGE,
         job_id: str | None = None,
-        mode: str = "clone",
+        mode: str = "preset",
         instruct: str = "",
+        speaker: str = "",
         progress_cb=None,
     ) -> dict:
-        mode = "design" if mode == "design" else "clone"
+        mode = normalize_engine_mode(mode)
         lang = LANGUAGE_BY_ID.get(language, LANGUAGE_BY_ID["Auto"])
         lang_code = lang["lang_code"]
         chunks = chunking.split_script(text, language)
         if not chunks:
             raise ValueError("Script is empty after splitting")
+        speaker_id = (speaker or DEFAULT_SPEAKER).strip()
         if mode == "design":
             if not instruct.strip():
                 raise ValueError("Voice description is required")
+        elif mode == "preset":
+            if speaker_id not in SPEAKER_BY_ID:
+                raise ValueError(f"Unknown speaker: {speaker_id}")
         else:
             if not ref_audio or not Path(ref_audio).exists():
                 raise FileNotFoundError("Reference audio is required for voice cloning")
@@ -91,13 +114,16 @@ class TTSEngine:
         wavs: list[np.ndarray] = []
         started = time.perf_counter()
         native_sr = self.sample_rate
+        style = instruct.strip()
 
         with self.lock:
             self._load_unlocked(mode)
             for offset in range(0, len(chunks), batch_size):
                 batch = chunks[offset : offset + batch_size]
                 if mode == "design":
-                    collected = self._generate_design_batch(batch, instruct.strip(), lang_code)
+                    collected = self._generate_design_batch(batch, style, lang_code)
+                elif mode == "preset":
+                    collected = self._generate_preset_batch(batch, speaker_id, lang_code, style)
                 else:
                     collected = self._generate_batch(batch, ref_audio, ref_text.strip(), lang_code)
                 for index in range(len(batch)):
@@ -141,6 +167,7 @@ class TTSEngine:
             "chunks": len(chunks),
             "language": language,
             "mode": mode,
+            "speaker": speaker_id if mode == "preset" else None,
             "batch_size": batch_size,
             "elapsed_sec": round(elapsed, 2),
             "audio_sec": round(duration, 2),
@@ -192,6 +219,28 @@ class TTSEngine:
         except Exception:
             return self._generate_one_by_one(batch, language, instruct=instruct)
 
+    def _generate_preset_batch(
+        self,
+        batch: list[str],
+        speaker: str,
+        language: str,
+        instruct: str,
+    ) -> dict[int, tuple[np.ndarray, int]]:
+        style = instruct or None
+        kwargs = {
+            "texts": batch,
+            "voices": [speaker] * len(batch),
+            "instructs": [style] * len(batch),
+            "lang_code": language,
+            "stream": False,
+            "verbose": False,
+        }
+        try:
+            results = list(self.model.batch_generate(**kwargs))
+            return _collect(results, self.sample_rate)
+        except Exception:
+            return self._generate_one_by_one(batch, language, voice=speaker, instruct=style)
+
     def _generate_one_by_one(
         self,
         batch: list[str],
@@ -200,6 +249,7 @@ class TTSEngine:
         ref_audio: str | None = None,
         ref_text: str | None = None,
         instruct: str | None = None,
+        voice: str | None = None,
     ) -> dict[int, tuple[np.ndarray, int]]:
         collected: dict[int, tuple[np.ndarray, int]] = {}
         for index, text in enumerate(batch):
@@ -211,6 +261,8 @@ class TTSEngine:
             }
             if instruct:
                 kwargs["instruct"] = instruct
+            if voice:
+                kwargs["voice"] = voice
             if ref_audio:
                 kwargs["ref_audio"] = ref_audio
                 kwargs["ref_text"] = ref_text

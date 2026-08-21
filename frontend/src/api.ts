@@ -41,6 +41,13 @@ export type Job = {
   rtf?: number | null;
 };
 
+export type Speaker = {
+  id: string;
+  label: string;
+  native: string;
+  description?: string;
+};
+
 export type Health = {
   ok: boolean;
   model_id: string;
@@ -49,7 +56,10 @@ export type Health = {
   model_dir_ready: boolean;
   design_model_id?: string;
   design_model_ready?: boolean;
-  current_mode?: "clone" | "design" | string;
+  custom_model_id?: string;
+  custom_model_ready?: boolean;
+  current_mode?: "clone" | "design" | "preset" | string;
+  default_speaker?: string;
   batch_size: number;
   languages?: Language[];
 };
@@ -87,6 +97,13 @@ export async function previewSplit(text: string, language: string): Promise<Prev
   return data.segments ?? [];
 }
 
+export async function listSpeakers(): Promise<{ data: Speaker[]; default: string }> {
+  const res = await fetch("/api/speakers");
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return { data: data.data ?? [], default: data.default ?? "Ryan" };
+}
+
 export async function listVoices(): Promise<Voice[]> {
   const res = await fetch("/api/voices");
   if (!res.ok) throw new Error(await parseError(res));
@@ -116,15 +133,17 @@ export async function createJob(opts: {
   refText?: string;
   batchSize: number;
   language: string;
-  mode?: "clone" | "design";
+  mode?: "clone" | "design" | "preset";
   instruct?: string;
+  speaker?: string;
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
   body.set("batch_size", String(opts.batchSize));
   body.set("language", opts.language);
-  body.set("mode", opts.mode || "clone");
+  body.set("mode", opts.mode || "preset");
   if (opts.instruct) body.set("instruct", opts.instruct);
+  if (opts.speaker) body.set("speaker", opts.speaker);
   if (opts.voiceId) body.set("voice_id", opts.voiceId);
   if (opts.refAudio) body.set("ref_audio", opts.refAudio);
   if (opts.refText) body.set("ref_text", opts.refText);

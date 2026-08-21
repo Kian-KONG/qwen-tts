@@ -13,8 +13,12 @@ case "$KIND" in
     DEST="$ROOT/models/qwen3-tts-voice-design"
     MODEL_ID="mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
     ;;
+  custom)
+    DEST="$ROOT/models/qwen3-tts-custom-voice"
+    MODEL_ID="mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
+    ;;
   *)
-    echo "Usage: $0 [base|design]"
+    echo "Usage: $0 [base|design|custom]"
     exit 1
     ;;
 esac

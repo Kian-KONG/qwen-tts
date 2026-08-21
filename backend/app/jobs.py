@@ -22,8 +22,9 @@ class Job:
     ref_text: str = ""
     batch_size: int = 4
     language: str = "Auto"
-    mode: str = "clone"
+    mode: str = "preset"
     instruct: str = ""
+    speaker: str = ""
 
 
 class JobRunner:
@@ -70,6 +71,7 @@ class JobRunner:
                     job_id=job.id,
                     mode=job.mode,
                     instruct=job.instruct,
+                    speaker=job.speaker,
                     progress_cb=on_progress,
                 )
                 job.progress = 1.0

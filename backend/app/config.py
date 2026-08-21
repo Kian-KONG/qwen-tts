@@ -18,6 +18,13 @@ DESIGN_MODEL_ID = os.getenv(
 DESIGN_MODEL_DIR = Path(
     os.getenv("QWEN_TTS_DESIGN_MODEL", ROOT / "models" / "qwen3-tts-voice-design")
 ).resolve()
+CUSTOM_MODEL_ID = os.getenv(
+    "QWEN_TTS_CUSTOM_MODEL_ID",
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16",
+)
+CUSTOM_MODEL_DIR = Path(
+    os.getenv("QWEN_TTS_CUSTOM_MODEL", ROOT / "models" / "qwen3-tts-custom-voice")
+).resolve()
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
 FRONTEND_DIST = ROOT / "frontend" / "dist"
@@ -47,5 +54,19 @@ LANGUAGES = [
 
 LANGUAGE_BY_ID = {item["id"]: item for item in LANGUAGES}
 
-for path in (VOICES_DIR, OUTPUT_DIR, MODEL_DIR.parent, DESIGN_MODEL_DIR.parent):
+DEFAULT_SPEAKER = os.getenv("QWEN_TTS_SPEAKER", "Ryan")
+SPEAKERS = [
+    {"id": "Ryan", "label": "Ryan", "native": "English", "description": "节奏感强的男声"},
+    {"id": "Aiden", "label": "Aiden", "native": "English", "description": "阳光美式男声"},
+    {"id": "Vivian", "label": "Vivian", "native": "Chinese", "description": "明亮略带锋芒的年轻女声"},
+    {"id": "Serena", "label": "Serena", "native": "Chinese", "description": "温暖柔和的年轻女声"},
+    {"id": "Uncle_Fu", "label": "Uncle Fu", "native": "Chinese", "description": "低沉醇厚的成熟男声"},
+    {"id": "Dylan", "label": "Dylan", "native": "Chinese", "description": "清晰自然的北京男声"},
+    {"id": "Eric", "label": "Eric", "native": "Chinese", "description": "略带沙哑的成都男声"},
+    {"id": "Ono_Anna", "label": "Ono Anna", "native": "Japanese", "description": "轻快灵动的日语女声"},
+    {"id": "Sohee", "label": "Sohee", "native": "Korean", "description": "情感丰富的韩语女声"},
+]
+SPEAKER_BY_ID = {item["id"]: item for item in SPEAKERS}
+
+for path in (VOICES_DIR, OUTPUT_DIR, MODEL_DIR.parent, DESIGN_MODEL_DIR.parent, CUSTOM_MODEL_DIR.parent):
     path.mkdir(parents=True, exist_ok=True)

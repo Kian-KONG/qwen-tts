@@ -106,6 +106,7 @@ label {
 
 .mode-switch {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 12px 0 4px;
 }
@@ -113,6 +114,34 @@ label {
 .mode-switch button.active {
   background: var(--accent);
   color: #1a140c;
+}
+
+.speaker-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+button.speaker {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  font-weight: 600;
+}
+
+button.speaker small {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+button.speaker.on {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .chips {
