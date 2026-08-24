@@ -133,15 +133,22 @@ export type TranscriptSegment = {
 };
 
 export type Transcript = {
-  text: string;
+  id?: string;
+  status?: string;
+  progress?: number;
+  stage?: string;
+  error?: string | null;
+  text?: string;
   language?: string;
   duration_sec?: number | null;
   elapsed_sec?: number;
   model_id?: string;
+  chunk?: number;
+  chunks?: number;
   segments?: TranscriptSegment[];
 };
 
-export async function transcribeAudio(
+export async function createTranscribeJob(
   file: File,
   language: string,
   context?: string,
@@ -151,6 +158,11 @@ export async function transcribeAudio(
   body.set("language", language);
   if (context?.trim()) body.set("context", context.trim());
   const res = await request("/api/transcribe", { method: "POST", body });
+  return res.json();
+}
+
+export async function getTranscribeJob(id: string): Promise<Transcript> {
+  const res = await request(`/api/transcribe/${id}`);
   return res.json();
 }
 

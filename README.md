@@ -108,14 +108,17 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 
 ## 语音转文字
 
-先 `make download-asr`。页面「Markdown 文稿」里上传音频点 **语音转文字**，会按句切成编号列表；克隆音色里点 **识别文字稿** 可自动填参考音频逐字稿。
+先 `make download-asr`。页面顶部有独立的 **语音转文字** 区（带进度条），识别完可点「填入配音文稿」或「填入克隆逐字稿」。转写和配音共用 GPU：加载 ASR 会卸掉 TTS，反过来也会。
 
-默认是 **Qwen3-ASR 1.7B bf16**（和配音同级，16GB 上转写时会卸掉 TTS，配音时再加载回来）。内存更紧可以用 0.6B：`./scripts/download_model.sh asr-0.6b`。
+默认是 **Qwen3-ASR 1.7B bf16**。内存更紧可以用 0.6B：`./scripts/download_model.sh asr-0.6b`。
+
+`POST /api/transcribe` 立刻返回任务，轮询 `GET /api/transcribe/{id}` 看进度：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/transcribe \
+JOB=$(curl -s -X POST http://127.0.0.1:8000/api/transcribe \
   -F "audio=@./speech.wav" \
-  -F "language=Auto"
+  -F "language=Auto" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+curl -s "http://127.0.0.1:8000/api/transcribe/$JOB"
 ```
 
 OpenAI 兼容：`POST /v1/audio/transcriptions`，字段 `file`。

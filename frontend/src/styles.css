@@ -320,6 +320,24 @@ button:disabled {
   gap: 16px;
 }
 
+.asr-panel {
+  margin-bottom: 18px;
+}
+
+.asr-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.asr-result {
+  min-height: 280px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
 .bar {
   height: 8px;
   background: #2a261f;
@@ -351,7 +369,8 @@ audio {
   .top,
   .grid,
   .player,
-  .row {
+  .row,
+  .asr-head {
     display: grid;
     grid-template-columns: 1fr;
   }

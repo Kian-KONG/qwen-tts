@@ -33,7 +33,7 @@ from .config import (
     SPEAKER_BY_ID,
     SPEAKERS,
 )
-from .asr import asr_engine
+from .asr import asr_engine, asr_runner, public_asr_job
 from .chunking import preview_segments
 from .engine import engine
 from .jobs import public_job, runner
@@ -230,20 +230,20 @@ async def api_transcribe(
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(await audio.read())
         tmp_path = Path(tmp.name)
+    job = asr_runner.submit(
+        audio_path=str(tmp_path),
+        language=_normalize_language(language),
+        context=context or "",
+    )
+    return public_asr_job(job)
+
+
+@app.get("/api/transcribe/{job_id}")
+def api_get_transcribe(job_id: str):
     try:
-        return asr_engine.transcribe(
-            str(tmp_path),
-            language=_normalize_language(language),
-            context=context or "",
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        tmp_path.unlink(missing_ok=True)
+        return public_asr_job(asr_runner.get(job_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Transcription job not found")
 
 
 @app.post("/v1/audio/transcriptions")

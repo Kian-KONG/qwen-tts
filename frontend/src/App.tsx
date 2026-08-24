@@ -2,18 +2,20 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "
 import {
   apiUrl,
   createJob,
+  createTranscribeJob,
   createVoice,
   deleteVoice,
   getHealth,
   getJob,
+  getTranscribeJob,
   listLanguages,
   listSpeakers,
   listVoices,
-  transcribeAudio,
   type Health,
   type Job,
   type Language,
   type Speaker,
+  type Transcript,
   type Voice,
 } from "./api";
 
@@ -74,6 +76,15 @@ function toMarkdown(items: string[]): string {
     .join("\n");
 }
 
+const ASR_STAGES: Record<string, string> = {
+  queued: "排队中",
+  converting: "转换音频",
+  loading: "加载转写模型",
+  transcribing: "识别中",
+  done: "完成",
+  error: "失败",
+};
+
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [languages, setLanguages] = useState<Language[]>([]);
@@ -89,6 +100,10 @@ export default function App() {
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refText, setRefText] = useState("");
   const [asrFile, setAsrFile] = useState<File | null>(null);
+  const [asrLanguage, setAsrLanguage] = useState("Auto");
+  const [asrJob, setAsrJob] = useState<Transcript | null>(null);
+  const [asrText, setAsrText] = useState("");
+  const [asrCopied, setAsrCopied] = useState(false);
   const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
   const [batchSize, setBatchSize] = useState(4);
   const [job, setJob] = useState<Job | null>(null);
@@ -131,6 +146,38 @@ export default function App() {
     }, 1200);
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status]);
+
+  useEffect(() => {
+    if (!asrJob?.id || asrJob.status === "done" || asrJob.status === "error") return;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await getTranscribeJob(asrJob.id as string);
+        setAsrJob(next);
+        if (next.text) setAsrText(next.text);
+      } catch (error) {
+        setAsrJob((current) =>
+          current
+            ? { ...current, status: "error", stage: "error", error: error instanceof Error ? error.message : "查询失败" }
+            : current,
+        );
+      }
+    }, 800);
+    return () => window.clearInterval(timer);
+  }, [asrJob?.id, asrJob?.status]);
+
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("asr");
+    if (!id) return;
+    void (async () => {
+      try {
+        const next = await getTranscribeJob(id);
+        setAsrJob(next);
+        if (next.text) setAsrText(next.text);
+      } catch {
+        setMessage("找不到转写任务");
+      }
+    })();
+  }, []);
 
   function addSegment() {
     const next = filledSegments.length + 1;
@@ -190,8 +237,8 @@ export default function App() {
     }
   }
 
-  async function onTranscribe(file: File | null, target: "script" | "ref") {
-    if (!file) {
+  async function onTranscribe() {
+    if (!asrFile) {
       setMessage("请先选择要识别的音频");
       return;
     }
@@ -199,25 +246,53 @@ export default function App() {
       setMessage("还没下载 Qwen3-ASR，请先运行 make download-asr");
       return;
     }
-    setBusy(true);
     setMessage("");
+    setAsrText("");
+    setAsrJob({ status: "queued", progress: 0, stage: "queued" });
     try {
-      const result = await transcribeAudio(file, language);
-      if (target === "ref") {
-        setRefText(result.text);
-        setMessage(`已识别参考音频文字稿 · ${result.language || language}`);
-      } else {
-        const next = result.segments?.length
-          ? result.segments.map((item) => `${item.index}. ${item.text}`).join("\n")
-          : toMarkdown(parseMarkdownList(result.text));
-        setMarkdown(next);
-        setMessage(`已转写成文稿 · ${result.segments?.length || 1} 段 · ${result.language || language}`);
-      }
+      const next = await createTranscribeJob(asrFile, asrLanguage);
+      setAsrJob(next.status ? next : { ...next, status: "done", progress: 1, stage: "done" });
+      if ((next.status === "done" || !next.status) && next.text) setAsrText(next.text);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "转写失败");
-    } finally {
-      setBusy(false);
+      const detail = error instanceof Error ? error.message : "转写提交失败";
+      setAsrJob({ status: "error", progress: 0, stage: "error", error: detail });
+      setMessage(detail);
     }
+  }
+
+  function applyAsrToScript() {
+    if (!asrText.trim()) return;
+    const original = (asrJob?.text || "").trim();
+    const next =
+      asrJob?.segments?.length && asrText.trim() === original
+        ? asrJob.segments.map((item) => `${item.index}. ${item.text}`).join("\n")
+        : toMarkdown(parseMarkdownList(asrText));
+    setMarkdown(next);
+    setMessage("已填入配音文稿");
+  }
+
+  function applyAsrToClone() {
+    if (!asrText.trim()) return;
+    setVoiceMode("clone");
+    setRefText(asrText.trim());
+    setMessage("已填入克隆逐字稿");
+  }
+
+  async function copyAsrText() {
+    const text = asrText.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const area = document.querySelector(".asr-result") as HTMLTextAreaElement | null;
+      if (!area) return;
+      area.focus();
+      area.select();
+      document.execCommand("copy");
+    }
+    setAsrCopied(true);
+    setMessage("已复制转写结果");
+    window.setTimeout(() => setAsrCopied(false), 2000);
   }
 
   async function onGenerate(event: FormEvent) {
@@ -281,6 +356,87 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      <section className="panel asr-panel">
+        <div className="asr-head">
+          <div>
+            <h2>语音转文字</h2>
+            <p className="hint">
+              独立转写区，不和配音抢界面。上传音频后会显示进度；第一次会先卸载 TTS、加载 Qwen3-ASR 1.7B。
+              {health?.asr_model_ready ? "" : " 当前还没下载 ASR 权重，请先运行 `make download-asr`。"}
+            </p>
+          </div>
+          <p className="hint">
+            {health?.asr_loaded ? "转写模型已加载" : health?.asr_model_ready ? "转写模型就绪，未加载" : "转写未下载"}
+          </p>
+        </div>
+        <div className="stack">
+          <div className="row">
+            <label className="grow">
+              音频
+              <input
+                type="file"
+                accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
+                onChange={(e) => setAsrFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <label>
+              语言
+              <select value={asrLanguage} onChange={(e) => setAsrLanguage(e.target.value)}>
+                {languages.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={() => void onTranscribe()}
+            disabled={!asrFile || health?.asr_model_ready === false || (asrJob?.status === "queued" || asrJob?.status === "running")}
+          >
+            {asrJob?.status === "queued" || asrJob?.status === "running" ? "转写中…" : "开始转写"}
+          </button>
+          {asrJob ? (
+            <div className="job">
+              <div className="bar">
+                <span style={{ width: `${Math.round((asrJob.progress || 0) * 100)}%` }} />
+              </div>
+              <p>
+                {asrJob.status === "done"
+                  ? `完成 · ${asrJob.segments?.length || 1} 段 · ${asrJob.duration_sec ?? "-"}s · 耗时 ${asrJob.elapsed_sec ?? "-"}s · ${asrJob.language || asrLanguage}`
+                  : asrJob.status === "error"
+                    ? asrJob.error
+                    : asrJob.chunk && asrJob.chunks
+                      ? `识别中 ${asrJob.chunk}/${asrJob.chunks} · ${Math.round((asrJob.progress || 0) * 100)}%`
+                      : `${ASR_STAGES[asrJob.stage || asrJob.status || ""] || asrJob.stage || asrJob.status} · ${Math.round((asrJob.progress || 0) * 100)}%`}
+              </p>
+            </div>
+          ) : null}
+          <label>
+            转写结果
+            <textarea
+              rows={16}
+              className="asr-result"
+              value={asrText}
+              onChange={(e) => setAsrText(e.target.value)}
+              placeholder="识别结果会出现在这里，可再编辑。"
+            />
+          </label>
+          <div className="row">
+            <button type="button" className="ghost" onClick={() => void copyAsrText()} disabled={!asrText.trim()}>
+              {asrCopied ? "已复制" : "复制结果"}
+            </button>
+            <button type="button" className="ghost" onClick={applyAsrToScript} disabled={!asrText.trim()}>
+              填入配音文稿
+            </button>
+            <button type="button" className="ghost" onClick={applyAsrToClone} disabled={!asrText.trim()}>
+              填入克隆逐字稿
+            </button>
+          </div>
+        </div>
+      </section>
 
       <main className="grid">
         <section className="panel">
@@ -358,7 +514,7 @@ export default function App() {
           ) : (
             <>
               <p className="hint">
-                录 3–10 秒干净人声，语言尽量和文稿一致，并写上逐字稿。iPhone 的 m4a / mp3 也可以，保存时会转成 WAV。
+                录 3–10 秒干净人声，语言尽量和文稿一致，并写上逐字稿。没有稿可先用上方语音转文字识别。iPhone 的 m4a / mp3 也可以，保存时会转成 WAV。
               </p>
               <form className="stack" onSubmit={onSaveVoice}>
                 <label>
@@ -373,16 +529,6 @@ export default function App() {
                     onChange={(e) => setRefFile(e.target.files?.[0] ?? null)}
                   />
                 </label>
-                <div className="row">
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => void onTranscribe(refFile, "ref")}
-                    disabled={busy || !refFile || health?.asr_model_ready === false}
-                  >
-                    识别文字稿
-                  </button>
-                </div>
                 <label>
                   参考音频文字稿
                   <textarea
@@ -439,29 +585,7 @@ export default function App() {
                 />
               </label>
             </div>
-            <p className="hint">
-              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段。回车会自动下一项；成片仍按编号合并。
-              也可以上传音频，用 Qwen3-ASR 转成文稿。
-              {health?.asr_model_ready ? "" : " 当前还没下载 ASR 权重，请先运行 `make download-asr`。"}
-            </p>
-            <div className="row">
-              <label className="grow">
-                音频转写
-                <input
-                  type="file"
-                  accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
-                  onChange={(e) => setAsrFile(e.target.files?.[0] ?? null)}
-                />
-              </label>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => void onTranscribe(asrFile, "script")}
-                disabled={busy || !asrFile || health?.asr_model_ready === false}
-              >
-                语音转文字
-              </button>
-            </div>
+            <p className="hint">用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段。回车会自动下一项；成片仍按编号合并。需要从音频出文稿时，用上方的语音转文字。</p>
             <textarea
               ref={editorRef}
               className="markdown-editor"
