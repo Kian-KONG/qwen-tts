@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from . import voices
 from .config import (
     API_KEY,
+    ASR_MODEL_DIR,
+    ASR_MODEL_ID,
     BATCH_SIZE,
     CUSTOM_MODEL_DIR,
     CUSTOM_MODEL_ID,
@@ -31,6 +33,7 @@ from .config import (
     SPEAKER_BY_ID,
     SPEAKERS,
 )
+from .asr import asr_engine
 from .chunking import preview_segments
 from .engine import engine
 from .jobs import public_job, runner
@@ -162,6 +165,10 @@ def health():
         "design_model_ready": _looks_like_model(DESIGN_MODEL_DIR),
         "custom_model_id": CUSTOM_MODEL_ID,
         "custom_model_ready": _looks_like_model(CUSTOM_MODEL_DIR),
+        "asr_model_id": ASR_MODEL_ID,
+        "asr_model_path": asr_engine.model_path,
+        "asr_model_ready": _looks_like_model(ASR_MODEL_DIR),
+        "asr_loaded": asr_engine.loaded,
         "current_mode": engine.mode,
         "default_speaker": DEFAULT_SPEAKER,
         "batch_size": BATCH_SIZE,
@@ -180,6 +187,12 @@ def list_models():
                 "object": "model",
                 "owned_by": "qwen3-tts",
                 "root": MODEL_ID,
+            },
+            {
+                "id": "whisper-1",
+                "object": "model",
+                "owned_by": "qwen3-asr",
+                "root": ASR_MODEL_ID,
             }
         ],
     }
@@ -205,6 +218,60 @@ def api_split(payload: SplitRequest):
     language = _normalize_language(payload.language)
     segments = preview_segments(payload.text, language)
     return {"language": language, "count": len(segments), "segments": segments}
+
+
+@app.post("/api/transcribe")
+async def api_transcribe(
+    audio: UploadFile = File(...),
+    language: str = Form(LANGUAGE),
+    context: Optional[str] = Form(None),
+):
+    suffix = Path(audio.filename or "audio.wav").suffix or ".wav"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await audio.read())
+        tmp_path = Path(tmp.name)
+    try:
+        return asr_engine.transcribe(
+            str(tmp_path),
+            language=_normalize_language(language),
+            context=context or "",
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/v1/audio/transcriptions")
+async def openai_transcriptions(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    prompt: Optional[str] = Form(None),
+    authorization: Optional[str] = Header(None),
+):
+    _check_key(authorization)
+    lang = language if language in LANGUAGE_BY_ID else LANGUAGE
+    suffix = Path(file.filename or "audio.wav").suffix or ".wav"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await file.read())
+        tmp_path = Path(tmp.name)
+    try:
+        result = asr_engine.transcribe(
+            str(tmp_path),
+            language=_normalize_language(lang),
+            context=prompt or "",
+        )
+        return {"text": result["text"], **result}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @app.post("/api/voices")

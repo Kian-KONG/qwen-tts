@@ -17,8 +17,16 @@ case "$KIND" in
     DEST="$ROOT/models/qwen3-tts-custom-voice"
     MODEL_ID="mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
     ;;
+  asr)
+    DEST="$ROOT/models/qwen3-asr"
+    MODEL_ID="mlx-community/Qwen3-ASR-1.7B-bf16"
+    ;;
+  asr-0.6b)
+    DEST="$ROOT/models/qwen3-asr"
+    MODEL_ID="mlx-community/Qwen3-ASR-0.6B-bf16"
+    ;;
   *)
-    echo "Usage: $0 [base|design|custom]"
+    echo "Usage: $0 [base|design|custom|asr|asr-0.6b]"
     exit 1
     ;;
 esac
@@ -30,8 +38,11 @@ mkdir -p "$DEST"
 export DEST MODEL_ID HF_ENDPOINT="${HF_MIRROR}"
 
 if [[ -f "$DEST/config.json" ]] && compgen -G "$DEST/*.safetensors" >/dev/null; then
-  echo "Model already present at $DEST"
-  exit 0
+  if [[ -f "$DEST/.repo_id" ]] && [[ "$(tr -d '[:space:]' < "$DEST/.repo_id")" == "$MODEL_ID" ]]; then
+    echo "Model already present at $DEST"
+    exit 0
+  fi
+  echo "Existing weights in $DEST are not $MODEL_ID; re-downloading."
 fi
 
 # shellcheck disable=SC1091
@@ -58,6 +69,7 @@ MS_STATUS=$?
 set -e
 
 if [[ $MS_STATUS -eq 0 && -f "$DEST/config.json" ]]; then
+  printf '%s\n' "$MODEL_ID" > "$DEST/.repo_id"
   echo "Model ready: $DEST"
   exit 0
 fi
@@ -75,4 +87,5 @@ snapshot_download(
 print("Downloaded from Hugging Face mirror")
 PY
 
+printf '%s\n' "$MODEL_ID" > "$DEST/.repo_id"
 echo "Model ready: $DEST"

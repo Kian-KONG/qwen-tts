@@ -9,6 +9,7 @@ import {
   listLanguages,
   listSpeakers,
   listVoices,
+  transcribeAudio,
   type Health,
   type Job,
   type Language,
@@ -87,6 +88,7 @@ export default function App() {
   const [styleInstruct, setStyleInstruct] = useState("");
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refText, setRefText] = useState("");
+  const [asrFile, setAsrFile] = useState<File | null>(null);
   const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
   const [batchSize, setBatchSize] = useState(4);
   const [job, setJob] = useState<Job | null>(null);
@@ -188,6 +190,36 @@ export default function App() {
     }
   }
 
+  async function onTranscribe(file: File | null, target: "script" | "ref") {
+    if (!file) {
+      setMessage("请先选择要识别的音频");
+      return;
+    }
+    if (health?.asr_model_ready === false) {
+      setMessage("还没下载 Qwen3-ASR，请先运行 make download-asr");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await transcribeAudio(file, language);
+      if (target === "ref") {
+        setRefText(result.text);
+        setMessage(`已识别参考音频文字稿 · ${result.language || language}`);
+      } else {
+        const next = result.segments?.length
+          ? result.segments.map((item) => `${item.index}. ${item.text}`).join("\n")
+          : toMarkdown(parseMarkdownList(result.text));
+        setMarkdown(next);
+        setMessage(`已转写成文稿 · ${result.segments?.length || 1} 段 · ${result.language || language}`);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "转写失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onGenerate(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -243,7 +275,8 @@ export default function App() {
             <p>
               {health?.model_loaded ? "已加载" : "未加载"}
               {health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}
-              {health?.design_model_ready ? " · 描述可用" : " · 描述未下载"} · {language} · batch {batchSize}
+              {health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}
+              {health?.asr_model_ready ? " · 转写可用" : " · 转写未下载"} · {language} · batch {batchSize}
             </p>
           </div>
         </div>
@@ -336,10 +369,20 @@ export default function App() {
                   参考音频
                   <input
                     type="file"
-                    accept="audio/wav,audio/mpeg,audio/*"
+                    accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
                     onChange={(e) => setRefFile(e.target.files?.[0] ?? null)}
                   />
                 </label>
+                <div className="row">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => void onTranscribe(refFile, "ref")}
+                    disabled={busy || !refFile || health?.asr_model_ready === false}
+                  >
+                    识别文字稿
+                  </button>
+                </div>
                 <label>
                   参考音频文字稿
                   <textarea
@@ -396,7 +439,29 @@ export default function App() {
                 />
               </label>
             </div>
-            <p className="hint">用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段。回车会自动下一项；成片仍按编号合并。</p>
+            <p className="hint">
+              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段。回车会自动下一项；成片仍按编号合并。
+              也可以上传音频，用 Qwen3-ASR 转成文稿。
+              {health?.asr_model_ready ? "" : " 当前还没下载 ASR 权重，请先运行 `make download-asr`。"}
+            </p>
+            <div className="row">
+              <label className="grow">
+                音频转写
+                <input
+                  type="file"
+                  accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
+                  onChange={(e) => setAsrFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => void onTranscribe(asrFile, "script")}
+                disabled={busy || !asrFile || health?.asr_model_ready === false}
+              >
+                语音转文字
+              </button>
+            </div>
             <textarea
               ref={editorRef}
               className="markdown-editor"

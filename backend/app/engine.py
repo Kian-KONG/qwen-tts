@@ -45,18 +45,26 @@ class TTSEngine:
         with self.lock:
             self._load_unlocked(mode)
 
+    def unload_unlocked(self) -> None:
+        if self.model is None and not self.loaded:
+            return
+        self.model = None
+        self.loaded = False
+        import gc
+        import mlx.core as mx
+
+        gc.collect()
+        mx.clear_cache()
+
     def _load_unlocked(self, mode: str) -> None:
         mode = normalize_engine_mode(mode)
         if self.loaded and self.mode == mode and self.model is not None:
             return
         from mlx_audio.tts.utils import load_model
-        import gc
-        import mlx.core as mx
+        from .asr import asr_engine
 
-        self.model = None
-        self.loaded = False
-        gc.collect()
-        mx.clear_cache()
+        asr_engine.unload_unlocked()
+        self.unload_unlocked()
         if mode == "design":
             if not _looks_like_model(DESIGN_MODEL_DIR):
                 raise FileNotFoundError(

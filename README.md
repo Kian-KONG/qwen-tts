@@ -5,8 +5,9 @@
 - **预设说话人**（CustomVoice）：点选 Ryan / Vivian 等 9 个官方音色，贴文字即可配
 - **描述音色**（VoiceDesign）：写一段声音描述造音色
 - **声音克隆**（Base）：3–10 秒参考音频 + 逐字稿
+- **语音转文字**（Qwen3-ASR 1.7B）：上传音频生成文稿或克隆逐字稿
 
-React 前端 + Python 后端，推理走 MLX。16GB 机器同一时间只加载其中一个模型。
+React 前端 + Python 后端，推理走 MLX。16GB 机器同一时间只加载一个大模型：配音和转写会互相卸掉对方，避免两个 1.7B 同时占满内存。
 
 不要用 4bit：输出会乱码。bf16 峰值大约 6GB。
 
@@ -19,6 +20,7 @@ make setup
 make download
 make download-design
 make download-custom
+make download-asr
 make start
 ```
 
@@ -34,6 +36,7 @@ make start
 | `make download` | 拉 Base bf16（声音克隆） |
 | `make download-design` | 拉 VoiceDesign bf16（描述音色） |
 | `make download-custom` | 拉 CustomVoice bf16（预设说话人） |
+| `make download-asr` | 拉 Qwen3-ASR 1.7B bf16（语音转文字） |
 | `make start` | 打包前端并由 FastAPI 提供 |
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |
@@ -102,6 +105,20 @@ curl http://127.0.0.1:8000/v1/audio/speech \
   }' \
   --output speech.wav
 ```
+
+## 语音转文字
+
+先 `make download-asr`。页面「Markdown 文稿」里上传音频点 **语音转文字**，会按句切成编号列表；克隆音色里点 **识别文字稿** 可自动填参考音频逐字稿。
+
+默认是 **Qwen3-ASR 1.7B bf16**（和配音同级，16GB 上转写时会卸掉 TTS，配音时再加载回来）。内存更紧可以用 0.6B：`./scripts/download_model.sh asr-0.6b`。
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/transcribe \
+  -F "audio=@./speech.wav" \
+  -F "language=Auto"
+```
+
+OpenAI 兼容：`POST /v1/audio/transcriptions`，字段 `file`。
 
 ## 准备参考音频
 

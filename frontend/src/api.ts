@@ -58,6 +58,9 @@ export type Health = {
   design_model_ready?: boolean;
   custom_model_id?: string;
   custom_model_ready?: boolean;
+  asr_model_id?: string;
+  asr_model_ready?: boolean;
+  asr_loaded?: boolean;
   current_mode?: "clone" | "design" | "preset" | string;
   default_speaker?: string;
   batch_size: number;
@@ -121,6 +124,34 @@ export async function listLanguages(): Promise<Language[]> {
   const res = await request("/api/languages");
   const data = await res.json();
   return data.data ?? [];
+}
+
+export type TranscriptSegment = {
+  index: number;
+  text: string;
+  chars: number;
+};
+
+export type Transcript = {
+  text: string;
+  language?: string;
+  duration_sec?: number | null;
+  elapsed_sec?: number;
+  model_id?: string;
+  segments?: TranscriptSegment[];
+};
+
+export async function transcribeAudio(
+  file: File,
+  language: string,
+  context?: string,
+): Promise<Transcript> {
+  const body = new FormData();
+  body.set("audio", file);
+  body.set("language", language);
+  if (context?.trim()) body.set("context", context.trim());
+  const res = await request("/api/transcribe", { method: "POST", body });
+  return res.json();
 }
 
 export async function previewSplit(text: string, language: string): Promise<PreviewSegment[]> {

@@ -25,6 +25,11 @@ CUSTOM_MODEL_ID = os.getenv(
 CUSTOM_MODEL_DIR = Path(
     os.getenv("QWEN_TTS_CUSTOM_MODEL", ROOT / "models" / "qwen3-tts-custom-voice")
 ).resolve()
+ASR_MODEL_ID = os.getenv(
+    "QWEN_ASR_MODEL_ID",
+    "mlx-community/Qwen3-ASR-1.7B-bf16",
+)
+ASR_MODEL_DIR = Path(os.getenv("QWEN_ASR_MODEL", ROOT / "models" / "qwen3-asr")).resolve()
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
 FRONTEND_DIST = ROOT / "frontend" / "dist"
@@ -68,5 +73,12 @@ SPEAKERS = [
 ]
 SPEAKER_BY_ID = {item["id"]: item for item in SPEAKERS}
 
-for path in (VOICES_DIR, OUTPUT_DIR, MODEL_DIR.parent, DESIGN_MODEL_DIR.parent, CUSTOM_MODEL_DIR.parent):
+for path in (
+    VOICES_DIR,
+    OUTPUT_DIR,
+    MODEL_DIR.parent,
+    DESIGN_MODEL_DIR.parent,
+    CUSTOM_MODEL_DIR.parent,
+    ASR_MODEL_DIR.parent,
+):
     path.mkdir(parents=True, exist_ok=True)
