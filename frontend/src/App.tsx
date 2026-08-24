@@ -324,7 +324,9 @@ export default function App() {
             </div>
           ) : (
             <>
-              <p className="hint">录 3–10 秒干净参考音频，语言尽量和文稿一致，并写上逐字稿。</p>
+              <p className="hint">
+                录 3–10 秒干净人声，语言尽量和文稿一致，并写上逐字稿。iPhone 的 m4a / mp3 也可以，保存时会转成 WAV。
+              </p>
               <form className="stack" onSubmit={onSaveVoice}>
                 <label>
                   音色名称

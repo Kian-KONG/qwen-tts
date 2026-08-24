@@ -109,6 +109,7 @@ class TTSEngine:
                 raise FileNotFoundError("Reference audio is required for voice cloning")
             if not (ref_text or "").strip():
                 raise ValueError("Reference transcript is required for ICL voice cloning")
+            ref_audio = str(audio_util.ensure_pcm_wav(ref_audio))
 
         batch_size = max(1, min(batch_size or BATCH_SIZE, 8))
         wavs: list[np.ndarray] = []

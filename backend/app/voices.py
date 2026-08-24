@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .audio_util import probe_duration
+from .audio_util import ensure_pcm_wav, probe_duration
 from .config import VOICES_DIR
 
 INDEX_PATH = VOICES_DIR / "index.json"
@@ -66,7 +65,7 @@ def create_voice(name: str, audio_path: Path, ref_text: str) -> dict:
     dest_audio = VOICES_DIR / f"{voice_id}.wav"
     dest_text = VOICES_DIR / f"{voice_id}.txt"
     VOICES_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(audio_path, dest_audio)
+    ensure_pcm_wav(audio_path, dest_audio)
     dest_text.write_text(ref_text.strip() + "\n", encoding="utf-8")
 
     item = {

@@ -117,3 +117,56 @@ def convert_format(src: Path, fmt: str) -> tuple[bytes, str]:
 def probe_duration(path: Path) -> float:
     info = sf.info(str(path))
     return float(info.frames) / float(info.samplerate)
+
+
+def _is_pcm_wav(path: Path) -> bool:
+    try:
+        info = sf.info(str(path))
+    except Exception:
+        return False
+    fmt = str(getattr(info, "format", "") or "").upper()
+    subtype = str(getattr(info, "subtype", "") or "").upper()
+    return fmt == "WAV" and subtype.startswith("PCM")
+
+
+def ensure_pcm_wav(src: Path | str, dst: Path | None = None, sample_rate: int = 24000) -> Path:
+    src = Path(src)
+    if not src.exists():
+        raise FileNotFoundError(f"Reference audio not found: {src}")
+    dst = Path(dst) if dst is not None else src.with_name(f"{src.stem}.pcm.wav")
+    if _is_pcm_wav(src) and dst.resolve() == src.resolve():
+        return src
+    ffmpeg = ffmpeg_bin()
+    if ffmpeg is None:
+        if _is_pcm_wav(src):
+            if dst.resolve() != src.resolve():
+                shutil.copy2(src, dst)
+                return dst
+            return src
+        raise RuntimeError("Reference audio is not WAV. Install ffmpeg or upload a WAV file.")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.tmp.wav")
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(src),
+                "-ar",
+                str(sample_rate),
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                str(tmp),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        tmp.replace(dst)
+    except subprocess.CalledProcessError as exc:
+        tmp.unlink(missing_ok=True)
+        detail = (exc.stderr or exc.stdout or b"").decode("utf-8", "ignore")[-400:]
+        raise RuntimeError(f"Could not convert reference audio to WAV. {detail}".strip()) from exc
+    return dst
