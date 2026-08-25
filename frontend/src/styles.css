@@ -180,6 +180,15 @@ textarea,
 select {
   padding: 10px 12px;
   width: 100%;
+  min-height: 44px;
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 36px;
+  background: #141310 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%239a9083' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1.5 1.8 L6 6.2 L10.5 1.8'/%3E%3C/svg%3E") no-repeat right 12px center;
 }
 
 textarea {
@@ -227,18 +236,48 @@ button:disabled {
   font-size: 13px;
 }
 
-.inline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.inline input {
-  width: 64px;
-}
-
 .grow {
   flex: 1;
+}
+
+.script-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 132px;
+  padding: 4px;
+  background: #141310;
+  border: 1px solid #3a342b;
+}
+
+.stepper button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.stepper button:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.stepper-value {
+  flex: 1;
+  min-width: 28px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
 .file-field-wrap {
@@ -475,9 +514,14 @@ audio {
   .grid,
   .player,
   .row,
-  .asr-head {
+  .asr-head,
+  .script-controls {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .stepper {
+    min-width: 0;
   }
 
   h1 {

@@ -735,8 +735,8 @@ export default function App() {
         <section className="panel">
           <h2>2. Markdown 文稿</h2>
           <form className="stack" onSubmit={onGenerate}>
-            <div className="row">
-              <label className="grow">
+            <div className="script-controls">
+              <label>
                 语言
                 <select value={language} onChange={(e) => setLanguage(e.target.value)}>
                   {languages.map((item) => (
@@ -746,15 +746,29 @@ export default function App() {
                   ))}
                 </select>
               </label>
-              <label className="inline">
-                batch
-                <input
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={batchSize}
-                  onChange={(e) => setBatchSize(Number(e.target.value) || 4)}
-                />
+              <label>
+                并发
+                <div className="stepper">
+                  <button
+                    type="button"
+                    className="ghost"
+                    aria-label="减少并发"
+                    disabled={batchSize <= 1}
+                    onClick={() => setBatchSize((n) => Math.max(1, n - 1))}
+                  >
+                    −
+                  </button>
+                  <span className="stepper-value">{batchSize}</span>
+                  <button
+                    type="button"
+                    className="ghost"
+                    aria-label="增加并发"
+                    disabled={batchSize >= 8}
+                    onClick={() => setBatchSize((n) => Math.min(8, n + 1))}
+                  >
+                    +
+                  </button>
+                </div>
               </label>
             </div>
             <p className="hint">
