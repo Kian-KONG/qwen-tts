@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +11,29 @@ import numpy as np
 import soundfile as sf
 
 from .config import OUTPUT_SAMPLE_RATE
+
+_UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\n\r\t]+')
+
+
+def clip_stem(text: str, voice: str) -> str:
+    left = _UNSAFE_NAME.sub(" ", (text or "").strip())
+    left = re.sub(r"\s+", " ", left).strip(" .") or "片段"
+    right = _UNSAFE_NAME.sub(" ", (voice or "").strip())
+    right = re.sub(r"\s+", " ", right).strip(" .") or "音色"
+    if len(left) > 40:
+        left = left[:40].rstrip()
+    return f"{left} - {right}"
+
+
+def unique_wav_name(folder: Path, text: str, voice: str, used: set[str]) -> str:
+    base = clip_stem(text, voice)
+    name = f"{base}.wav"
+    index = 2
+    while name.lower() in used or (folder / name).exists():
+        name = f"{base} {index}.wav"
+        index += 1
+    used.add(name.lower())
+    return name
 
 
 def ffmpeg_bin() -> str | None:

@@ -41,6 +41,7 @@ def persist_job(job: Any) -> None:
         "language": job.language,
         "mode": job.mode,
         "speaker": job.speaker or None,
+        "voices": getattr(job, "voices", None) or [],
         "instruct": job.instruct,
         "batch_size": job.batch_size,
         **(job.stats or {}),
@@ -113,6 +114,8 @@ def public_from_record(record: dict) -> dict:
             {
                 "index": index,
                 "text": item.get("text") or "",
+                "voice": item.get("voice"),
+                "filename": item.get("filename"),
                 "duration_sec": item.get("duration_sec"),
                 "url": f"/api/jobs/{job_id}/segments/{index}/audio",
             }
@@ -140,6 +143,17 @@ def public_from_record(record: dict) -> dict:
         "download_url": f"/api/jobs/{job_id}/audio" if done else None,
         "zip_url": f"/api/jobs/{job_id}/zip" if done else None,
         "segments": segments,
+        "tracks": [
+            {
+                "index": item.get("index") or i + 1,
+                "voice": item.get("voice"),
+                "filename": item.get("filename"),
+                "duration_sec": item.get("duration_sec"),
+                "url": f"/api/jobs/{job_id}/tracks/{item.get('index') or i + 1}/audio",
+            }
+            for i, item in enumerate(record.get("tracks") or [])
+        ],
+        "speakers": record.get("speakers"),
         "chunks": record.get("chunks") or len(segments) or 1,
         "language": record.get("language") or None,
         "mode": record.get("mode") or None,

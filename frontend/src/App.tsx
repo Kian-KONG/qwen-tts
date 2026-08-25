@@ -21,6 +21,7 @@ import {
   withDownload,
   type Health,
   type Job,
+  type JobSegment,
   type Language,
   type Speaker,
   type Transcript,
@@ -56,7 +57,16 @@ function parseMarkdownList(text: string): string[] {
   const items: string[] = [];
   let current: string | null = null;
   let sawMark = false;
-  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+  const normalized = text.replace(/\r\n/g, "\n").split("\n").flatMap((line) => {
+    const marks = [...line.matchAll(/(?:(?<=\s)|(?<=^))(?:\d{1,3}[\.\)、:：]|\(\d{1,3}\)|\（\d{1,3}\）)\s+/g)];
+    if (marks.length < 2) return [line];
+    return marks.map((mark, index) => {
+      const start = mark.index ?? 0;
+      const end = index + 1 < marks.length ? (marks[index + 1].index ?? line.length) : line.length;
+      return line.slice(start, end).trim();
+    }).filter(Boolean);
+  });
+  for (const line of normalized) {
     const match = line.match(ITEM_MARK);
     if (match) {
       sawMark = true;
@@ -95,6 +105,8 @@ const ASR_STAGES: Record<string, string> = {
 
 const VOICE_MODE_KEY = "qwen-tts-voice-mode";
 const VOICE_ID_KEY = "qwen-tts-voice-id";
+const VOICE_IDS_KEY = "qwen-tts-voice-ids";
+const SPEAKERS_KEY = "qwen-tts-speakers";
 const JOB_ID_KEY = "qwen-tts-job-id";
 
 const MODE_LABEL: Record<string, string> = {
@@ -109,6 +121,52 @@ function stored(key: string, fallback: string): string {
   } catch {
     return fallback;
   }
+}
+
+function storedList(key: string, fallback: string[]): string[] {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    const items = raw.split(",").map((item) => item.trim()).filter(Boolean);
+    return items.length ? items : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function toggleId(current: string[], id: string, keepLast = false): string[] {
+  if (current.includes(id)) {
+    const next = current.filter((item) => item !== id);
+    return keepLast && !next.length ? current : next;
+  }
+  return [...current, id];
+}
+
+function clipLabel(segment: { text?: string | null; voice?: string | null; filename?: string | null }): string {
+  if (segment.filename) return segment.filename.replace(/\.wav$/i, "");
+  const text = (segment.text || "片段").trim() || "片段";
+  const voice = (segment.voice || "音色").trim() || "音色";
+  return `${text} - ${voice}`;
+}
+
+function wavName(label: string): string {
+  return label.toLowerCase().endsWith(".wav") ? label : `${label}.wav`;
+}
+
+function groupSegments(segments: JobSegment[]): { text: string; clips: JobSegment[] }[] {
+  const groups: { text: string; clips: JobSegment[] }[] = [];
+  const index = new Map<string, { text: string; clips: JobSegment[] }>();
+  for (const segment of segments) {
+    const key = segment.text || `\0${segment.index}`;
+    let group = index.get(key);
+    if (!group) {
+      group = { text: segment.text || "", clips: [] };
+      index.set(key, group);
+      groups.push(group);
+    }
+    group.clips.push(segment);
+  }
+  return groups;
 }
 
 function storedVoiceMode(): "preset" | "design" | "clone" {
@@ -156,8 +214,14 @@ export default function App() {
   const [language, setLanguage] = useState("Auto");
   const [voices, setVoices] = useState<Voice[]>([]);
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
-  const [speaker, setSpeaker] = useState("Ryan");
-  const [voiceId, setVoiceId] = useState(() => stored(VOICE_ID_KEY, ""));
+  const [selectedSpeakers, setSelectedSpeakers] = useState<string[]>(() => storedList(SPEAKERS_KEY, ["Ryan"]));
+  const [voiceId, setVoiceId] = useState(() => stored(VOICE_ID_KEY, "") || storedList(VOICE_IDS_KEY, [])[0] || "");
+  const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>(() => {
+    const ids = storedList(VOICE_IDS_KEY, []);
+    if (ids.length) return ids;
+    const one = stored(VOICE_ID_KEY, "");
+    return one ? [one] : [];
+  });
   const [voiceName, setVoiceName] = useState("Studio A");
   const [voiceMode, setVoiceMode] = useState<"preset" | "design" | "clone">(storedVoiceMode);
   const [instruct, setInstruct] = useState(VOICE_PRESETS[0].text);
@@ -183,6 +247,12 @@ export default function App() {
   const voicePlayerRef = useRef<HTMLAudioElement | null>(null);
 
   const filledSegments = useMemo(() => parseMarkdownList(markdown), [markdown]);
+  const voiceCount =
+    voiceMode === "preset"
+      ? selectedSpeakers.length
+      : voiceMode === "clone"
+        ? selectedVoiceIds.length || (refFile && refText.trim() ? 1 : 0)
+        : 1;
 
   async function refresh() {
     try {
@@ -196,7 +266,11 @@ export default function App() {
       setVoices(nextVoices);
       setLanguages(nextLanguages);
       setSpeakers(nextSpeakers.data);
-      setSpeaker((current) => current || nextSpeakers.default || "Ryan");
+      setSelectedSpeakers((current) => {
+        const valid = current.filter((id) => nextSpeakers.data.some((item) => item.id === id));
+        return valid.length ? valid : [nextSpeakers.default || "Ryan"];
+      });
+      setSelectedVoiceIds((current) => current.filter((id) => nextVoices.some((item) => item.id === id)));
       setVoiceId((current) => {
         if (current && nextVoices.some((item) => item.id === current)) return current;
         return nextVoices[0]?.id || "";
@@ -225,10 +299,12 @@ export default function App() {
     try {
       window.localStorage.setItem(VOICE_MODE_KEY, voiceMode);
       if (voiceId) window.localStorage.setItem(VOICE_ID_KEY, voiceId);
+      window.localStorage.setItem(SPEAKERS_KEY, selectedSpeakers.join(","));
+      window.localStorage.setItem(VOICE_IDS_KEY, selectedVoiceIds.join(","));
     } catch {
       /* ignore quota / private mode */
     }
-  }, [voiceMode, voiceId]);
+  }, [voiceMode, voiceId, selectedSpeakers, selectedVoiceIds]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error") return;
@@ -357,6 +433,7 @@ export default function App() {
       const voice = await createVoice(voiceName, refFile, refText);
       await refresh();
       setVoiceId(voice.id);
+      setSelectedVoiceIds((current) => (current.includes(voice.id) ? current : [...current, voice.id]));
       setMessage(`已保存音色 ${voice.name}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败");
@@ -431,11 +508,12 @@ export default function App() {
       const next = await createJob({
         text: markdown,
         mode: voiceMode,
-        speaker: voiceMode === "preset" ? speaker : undefined,
+        speakers: voiceMode === "preset" ? selectedSpeakers : undefined,
         instruct: voiceMode === "design" ? instruct : voiceMode === "preset" ? styleInstruct || undefined : undefined,
-        voiceId: voiceMode === "clone" ? voiceId || undefined : undefined,
-        refAudio: voiceMode === "clone" && !voiceId ? refFile || undefined : undefined,
-        refText: voiceMode === "clone" && !voiceId ? refText : undefined,
+        voiceIds: voiceMode === "clone" && selectedVoiceIds.length ? selectedVoiceIds : undefined,
+        voiceId: voiceMode === "clone" && !selectedVoiceIds.length ? voiceId || undefined : undefined,
+        refAudio: voiceMode === "clone" && !selectedVoiceIds.length && !voiceId ? refFile || undefined : undefined,
+        refText: voiceMode === "clone" && !selectedVoiceIds.length && !voiceId ? refText : undefined,
         batchSize,
         language,
       });
@@ -451,6 +529,15 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function toggleSpeaker(id: string) {
+    setSelectedSpeakers((current) => toggleId(current, id, true));
+  }
+
+  function toggleCloneVoice(id: string) {
+    setSelectedVoiceIds((current) => toggleId(current, id));
+    setVoiceId(id);
   }
 
   async function togglePlayVoice(id: string) {
@@ -506,6 +593,7 @@ export default function App() {
       setPlayingVoiceId(null);
     }
     await deleteVoice(voiceId);
+    setSelectedVoiceIds((current) => current.filter((id) => id !== voiceId));
     setVoiceId("");
     setRenamingId(null);
     await refresh();
@@ -680,7 +768,7 @@ export default function App() {
           {voiceMode === "preset" ? (
             <div className="stack">
               <p className="hint">
-                点选官方音色后直接配音，不用写描述也不用上传参考音频。
+                可多选。同一文稿会为每个音色各生成一段短音频，下载文件名是「文本 - 声色.wav」。男女声请同时点选，例如 Ryan + Vivian。
                 {health?.custom_model_ready ? "" : " 当前还没下载 CustomVoice 权重，请先运行 `make download-custom`。"}
               </p>
               <div className="speaker-grid">
@@ -688,8 +776,9 @@ export default function App() {
                   <button
                     key={item.id}
                     type="button"
-                    className={speaker === item.id ? "speaker on" : "speaker"}
-                    onClick={() => setSpeaker(item.id)}
+                    className={selectedSpeakers.includes(item.id) ? "speaker on" : "speaker"}
+                    aria-pressed={selectedSpeakers.includes(item.id)}
+                    onClick={() => toggleSpeaker(item.id)}
                   >
                     {item.label}
                     <small>
@@ -739,7 +828,7 @@ export default function App() {
           ) : (
             <>
               <p className="hint">
-                上传过的音色保存在本机 `data/voices/`，刷新后仍可点选复用。新音色录 3–10 秒干净人声，并写上逐字稿。
+                克隆音色可多选。上传过的音色保存在本机 `data/voices/`，刷新后仍可点选复用。新音色录 3–10 秒干净人声，并写上逐字稿。
               </p>
               {voices.length ? (
                 <div className="stack">
@@ -750,8 +839,8 @@ export default function App() {
                   />
                   <div className="voice-list">
                     {voices.map((voice) => (
-                      <div key={voice.id} className={voiceId === voice.id ? "voice-card on" : "voice-card"}>
-                        <button type="button" className="voice-select" onClick={() => setVoiceId(voice.id)}>
+                      <div key={voice.id} className={selectedVoiceIds.includes(voice.id) ? "voice-card on" : "voice-card"}>
+                        <button type="button" className="voice-select" onClick={() => toggleCloneVoice(voice.id)}>
                           <strong>{voice.name}</strong>
                           <small>
                             {voice.duration_sec ? `${voice.duration_sec}s` : "已保存"}
@@ -863,7 +952,7 @@ export default function App() {
               </label>
             </div>
             <p className="hint">
-              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段。也可以导入 Excel / CSV，每个非空单元格就是一段语音。
+              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段短音频，不会连读成一条。下载文件名是「文本 - 声色.wav」。也可以导入 Excel / CSV，每个非空单元格就是一段。
             </p>
             <FileField
               label="导入 Excel / CSV"
@@ -904,12 +993,14 @@ export default function App() {
               disabled={
                 busy ||
                 filledSegments.length === 0 ||
-                (voiceMode === "preset" && (!speaker || health?.custom_model_ready === false)) ||
+                (voiceMode === "preset" && (!selectedSpeakers.length || health?.custom_model_ready === false)) ||
                 (voiceMode === "design" && (!instruct.trim() || health?.design_model_ready === false)) ||
-                (voiceMode === "clone" && !voiceId && (!refFile || !refText.trim()))
+                (voiceMode === "clone" && !selectedVoiceIds.length && !voiceId && (!refFile || !refText.trim()))
               }
             >
-              {busy ? "提交中…" : `分段配音（${filledSegments.length} 段）`}
+              {busy
+                ? "提交中…"
+                : `分段配音（${filledSegments.length} 段${voiceCount > 1 ? ` × ${voiceCount} 音色` : ""}）`}
             </button>
           </form>
         </section>
@@ -933,8 +1024,15 @@ export default function App() {
                   <small>
                     {formatWhen(item.created_at)}
                     {item.mode ? ` · ${MODE_LABEL[item.mode] || item.mode}` : ""}
+                    {item.speakers?.length ? ` · ${item.speakers.join(" / ")}` : item.speaker ? ` · ${item.speaker}` : ""}
                     {item.audio_sec ? ` · ${item.audio_sec}s` : ""}
-                    {item.segments?.length ? ` · ${item.segments.length} 段` : item.chunks ? ` · ${item.chunks} 段` : ""}
+                    {item.chunks && item.speakers && item.speakers.length > 1
+                      ? ` · ${item.chunks} 段 × ${item.speakers.length} 音色`
+                      : item.segments?.length
+                        ? ` · ${item.segments.length} 段`
+                        : item.chunks
+                          ? ` · ${item.chunks} 段`
+                          : ""}
                     {item.status !== "done" ? ` · ${item.status}` : ""}
                   </small>
                 </button>
@@ -965,48 +1063,66 @@ export default function App() {
             </div>
             <p>
               {job.status === "done"
-                ? `完成 · ${job.segments?.length || job.chunks} 段 · ${job.audio_sec}s · 耗时 ${job.elapsed_sec}s · RTF ${job.rtf}`
+                ? `完成 · ${job.chunks || job.segments?.length || 0} 段${
+                    job.speakers && job.speakers.length > 1 ? ` × ${job.speakers.length} 音色` : ""
+                  } · ${job.audio_sec}s · 耗时 ${job.elapsed_sec}s · RTF ${job.rtf}`
                 : job.status === "error"
                   ? job.error
                   : `${job.status} · ${Math.round((job.progress || 0) * 100)}%`}
             </p>
             {job.status === "done" && job.local_dir && !API_BASE ? (
-              <p className="hint">本机目录 {job.local_dir}</p>
+              <p className="hint">本机目录 {job.local_dir} · 文件名「文本 - 声色.wav」</p>
             ) : null}
-            {audioUrl ? (
-              <div className="player">
-                <audio controls src={audioUrl} />
-                <button type="button" onClick={() => void onDownload(withDownload(audioUrl), `${job.id}.wav`)}>
-                  完整轨
-                </button>
+            {job.status === "done" && (job.tracks?.length || audioUrl) ? (
+              <div className="tracks">
+                {(job.tracks?.length
+                  ? job.tracks
+                  : audioUrl
+                    ? [{ index: 1, url: audioUrl, filename: `${job.id}.wav`, voice: job.speaker }]
+                    : []
+                ).map((track) => {
+                  const name = track.filename || `完整轨${track.voice ? ` - ${track.voice}` : ""}.wav`;
+                  return (
+                    <div key={track.index} className="player">
+                      <span>{name.replace(/\.wav$/i, "")}</span>
+                      <audio controls src={track.url} />
+                      <button type="button" onClick={() => void onDownload(withDownload(track.url), wavName(name))}>
+                        下载
+                      </button>
+                    </div>
+                  );
+                })}
                 {zipUrl ? (
                   <button type="button" className="ghost" onClick={() => void onDownload(zipUrl, `${job.id}.zip`)}>
-                    打包分段
+                    打包全部分段
                   </button>
                 ) : null}
               </div>
             ) : null}
             {job.status === "done" && job.segments?.length ? (
               <ol className="clips">
-                {job.segments.map((segment) => (
-                  <li key={segment.index}>
-                    <div>
-                      <strong>{segment.index}.</strong>
-                      <p>{segment.text}</p>
+                {groupSegments(job.segments).map((group) => (
+                  <li key={group.clips.map((clip) => clip.index).join("-")}>
+                    {group.clips.length > 1 ? <p>{group.text}</p> : null}
+                    <div className="clip-voices">
+                      {group.clips.map((segment) => {
+                        const name = clipLabel(segment);
+                        return (
+                          <div key={segment.index} className="clip-voice">
+                            <strong>{group.clips.length > 1 ? segment.voice || name : name}</strong>
+                            {group.clips.length === 1 && group.text && group.text !== name ? <p>{group.text}</p> : null}
+                            <audio controls src={segment.url} />
+                            <button
+                              type="button"
+                              className="ghost mini"
+                              onClick={() => void onDownload(withDownload(segment.url), wavName(segment.filename || name))}
+                            >
+                              下载
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <audio controls src={segment.url} />
-                    <button
-                      type="button"
-                      className="ghost mini"
-                      onClick={() =>
-                        void onDownload(
-                          withDownload(segment.url),
-                          `${job.id}_${String(segment.index).padStart(3, "0")}.wav`,
-                        )
-                      }
-                    >
-                      下载
-                    </button>
                   </li>
                 ))}
               </ol>

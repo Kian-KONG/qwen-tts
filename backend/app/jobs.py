@@ -26,6 +26,7 @@ class Job:
     mode: str = "preset"
     instruct: str = ""
     speaker: str = ""
+    voices: list[dict] = field(default_factory=list)
 
 
 class JobRunner:
@@ -79,6 +80,7 @@ class JobRunner:
                     mode=job.mode,
                     instruct=job.instruct,
                     speaker=job.speaker,
+                    voices=job.voices or None,
                     progress_cb=on_progress,
                 )
                 job.progress = 1.0
@@ -98,14 +100,27 @@ runner = JobRunner()
 def public_job(job: Job) -> dict:
     stats = dict(job.stats)
     raw_segments = stats.pop("segments", []) or []
+    raw_tracks = stats.pop("tracks", []) or []
     segments = [
         {
             "index": item["index"],
             "text": item["text"],
+            "voice": item.get("voice"),
+            "filename": item.get("filename"),
             "duration_sec": item.get("duration_sec"),
             "url": f"/api/jobs/{job.id}/segments/{item['index']}/audio",
         }
         for item in raw_segments
+    ]
+    tracks = [
+        {
+            "index": item.get("index") or i + 1,
+            "voice": item.get("voice"),
+            "filename": item.get("filename"),
+            "duration_sec": item.get("duration_sec"),
+            "url": f"/api/jobs/{job.id}/tracks/{item.get('index') or i + 1}/audio",
+        }
+        for i, item in enumerate(raw_tracks)
     ]
     download = f"/api/jobs/{job.id}/audio" if job.status == "done" else None
     zip_url = f"/api/jobs/{job.id}/zip" if job.status == "done" and segments else None
@@ -113,6 +128,10 @@ def public_job(job: Job) -> dict:
     if not title:
         line = (job.text or "").strip().split("\n")[0]
         title = line.lstrip("0123456789.、)）:： ").strip()[:48]
+    speakers = stats.get("speakers") or [
+        str(item.get("name") or item.get("id") or "") for item in (job.voices or [])
+    ]
+    speakers = [name for name in speakers if name]
     return {
         "id": job.id,
         "status": job.status,
@@ -123,6 +142,8 @@ def public_job(job: Job) -> dict:
         "download_url": download,
         "zip_url": zip_url,
         "local_dir": f"data/output/{job.id}" if job.status == "done" else None,
-        "segments": segments,
         **stats,
+        "segments": segments,
+        "tracks": tracks,
+        "speakers": speakers or None,
     }

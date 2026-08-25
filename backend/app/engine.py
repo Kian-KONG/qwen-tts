@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -97,6 +98,7 @@ class TTSEngine:
         mode: str = "preset",
         instruct: str = "",
         speaker: str = "",
+        voices: list[dict] | None = None,
         progress_cb=None,
     ) -> dict:
         mode = normalize_engine_mode(mode)
@@ -106,86 +108,148 @@ class TTSEngine:
         if not chunks:
             raise ValueError("Script is empty after splitting")
         speaker_id = (speaker or DEFAULT_SPEAKER).strip()
+        voice_list = [item for item in (voices or []) if item.get("id") or item.get("name")]
+        if not voice_list:
+            if mode == "design":
+                voice_list = [{"id": "design", "name": "描述音色", "kind": "design"}]
+            elif mode == "preset":
+                voice_list = [
+                    {
+                        "id": speaker_id,
+                        "name": SPEAKER_BY_ID.get(speaker_id, {}).get("label") or speaker_id,
+                        "kind": "preset",
+                    }
+                ]
+            else:
+                voice_list = [{"id": "clone", "name": "克隆", "kind": "clone"}]
         if mode == "design":
             if not instruct.strip():
                 raise ValueError("Voice description is required")
         elif mode == "preset":
-            if speaker_id not in SPEAKER_BY_ID:
-                raise ValueError(f"Unknown speaker: {speaker_id}")
+            for item in voice_list:
+                sid = str(item.get("id") or speaker_id)
+                if sid not in SPEAKER_BY_ID:
+                    raise ValueError(f"Unknown speaker: {sid}")
+                item["id"] = sid
+                item["name"] = item.get("name") or SPEAKER_BY_ID[sid]["label"]
+                item["kind"] = "preset"
         else:
-            if not ref_audio or not Path(ref_audio).exists():
-                raise FileNotFoundError("Reference audio is required for voice cloning")
-            if not (ref_text or "").strip():
-                raise ValueError("Reference transcript is required for ICL voice cloning")
-            ref_audio = str(audio_util.ensure_pcm_wav(ref_audio))
+            for item in voice_list:
+                ref = item.get("ref_audio") or ref_audio
+                transcript = item.get("ref_text") or ref_text
+                if not ref or not Path(ref).exists():
+                    raise FileNotFoundError("Reference audio is required for voice cloning")
+                if not (transcript or "").strip():
+                    raise ValueError("Reference transcript is required for ICL voice cloning")
+                item["ref_audio"] = str(audio_util.ensure_pcm_wav(ref))
+                item["ref_text"] = str(transcript).strip()
+                item["kind"] = "clone"
+                item["name"] = item.get("name") or item.get("id") or "克隆"
 
         batch_size = max(1, min(batch_size or BATCH_SIZE, 8))
-        wavs: list[np.ndarray] = []
         started = time.perf_counter()
         native_sr = self.sample_rate
         style = instruct.strip()
+        stem = job_id or time.strftime("%Y%m%d-%H%M%S")
+        segment_dir = OUTPUT_DIR / stem
+        segment_dir.mkdir(parents=True, exist_ok=True)
+        used_names: set[str] = set()
+        segments: list[dict] = []
+        tracks: list[dict] = []
+        clip_index = 0
+        n_voices = max(1, len(voice_list))
 
         with self.lock:
             self._load_unlocked(mode)
-            for offset in range(0, len(chunks), batch_size):
-                batch = chunks[offset : offset + batch_size]
-                if mode == "design":
-                    collected = self._generate_design_batch(batch, style, lang_code)
-                elif mode == "preset":
-                    collected = self._generate_preset_batch(batch, speaker_id, lang_code, style)
-                else:
-                    collected = self._generate_batch(batch, ref_audio, ref_text.strip(), lang_code)
-                for index in range(len(batch)):
-                    if index not in collected:
-                        raise RuntimeError(f"Missing audio for chunk {offset + index}")
-                    audio, rate = collected[index]
-                    native_sr = rate
-                    wavs.append(audio_util.to_float32(audio))
-                if progress_cb:
-                    progress_cb(min(1.0, (offset + len(batch)) / len(chunks)))
+            for voice_offset, voice in enumerate(voice_list):
+                wavs: list[np.ndarray] = []
+                sid = str(voice.get("id") or speaker_id)
+                for offset in range(0, len(chunks), batch_size):
+                    batch = chunks[offset : offset + batch_size]
+                    if mode == "design":
+                        collected = self._generate_design_batch(batch, style, lang_code)
+                    elif mode == "preset":
+                        collected = self._generate_preset_batch(batch, sid, lang_code, style)
+                    else:
+                        collected = self._generate_batch(
+                            batch,
+                            str(voice["ref_audio"]),
+                            str(voice["ref_text"]),
+                            lang_code,
+                        )
+                    for index in range(len(batch)):
+                        if index not in collected:
+                            raise RuntimeError(f"Missing audio for chunk {offset + index}")
+                        audio, rate = collected[index]
+                        native_sr = rate
+                        wavs.append(audio_util.to_float32(audio))
+                    if progress_cb:
+                        local = min(1.0, (offset + len(batch)) / len(chunks))
+                        progress_cb(min(1.0, (voice_offset + local) / n_voices))
 
-        stem = job_id or time.strftime("%Y%m%d-%H%M%S")
-        segment_dir = OUTPUT_DIR / stem
-        segments = []
-        for index, (chunk, wav) in enumerate(zip(chunks, wavs), start=1):
-            raw_path = segment_dir / f"seg_{index:03d}.raw.wav"
-            out_seg = segment_dir / f"seg_{index:03d}.wav"
-            audio_util.write_wav(raw_path, wav, native_sr)
-            audio_util.resample_for_video(raw_path, out_seg)
-            raw_path.unlink(missing_ok=True)
-            duration = float(wav.size) / float(native_sr) if native_sr else 0.0
-            segments.append(
-                {
-                    "index": index,
-                    "text": chunk,
-                    "duration_sec": round(duration, 2),
-                    "path": str(out_seg),
-                }
-            )
+                voice_name = str(voice.get("name") or sid)
+                for chunk, wav in zip(chunks, wavs):
+                    clip_index += 1
+                    filename = audio_util.unique_wav_name(segment_dir, chunk, voice_name, used_names)
+                    raw_path = segment_dir / f".seg_{clip_index:03d}.raw.wav"
+                    out_seg = segment_dir / filename
+                    audio_util.write_wav(raw_path, wav, native_sr)
+                    audio_util.resample_for_video(raw_path, out_seg)
+                    raw_path.unlink(missing_ok=True)
+                    duration = float(wav.size) / float(native_sr) if native_sr else 0.0
+                    segments.append(
+                        {
+                            "index": clip_index,
+                            "text": chunk,
+                            "voice": voice_name,
+                            "voice_id": sid,
+                            "filename": filename,
+                            "duration_sec": round(duration, 2),
+                            "path": str(out_seg),
+                        }
+                    )
 
-        audio = audio_util.concat_with_gap(wavs, native_sr, GAP_MS)
+                audio = audio_util.concat_with_gap(wavs, native_sr, GAP_MS)
+                track_name = audio_util.unique_wav_name(segment_dir, "完整轨", voice_name, used_names)
+                raw_path = segment_dir / f".full_{sid}.raw.wav"
+                track_path = segment_dir / track_name
+                audio_util.write_wav(raw_path, audio, native_sr)
+                audio_util.resample_for_video(raw_path, track_path)
+                raw_path.unlink(missing_ok=True)
+                tracks.append(
+                    {
+                        "index": len(tracks) + 1,
+                        "voice": voice_name,
+                        "voice_id": sid,
+                        "filename": track_name,
+                        "path": str(track_path),
+                        "duration_sec": round(float(audio.size) / float(native_sr), 2) if native_sr else 0.0,
+                    }
+                )
+
         elapsed = time.perf_counter() - started
-        duration = float(audio.size) / float(native_sr) if native_sr else 0.0
-        raw_path = segment_dir / "full.raw.wav"
-        out_path = segment_dir / "full.wav"
-        audio_util.write_wav(raw_path, audio, native_sr)
-        audio_util.resample_for_video(raw_path, out_path)
-        raw_path.unlink(missing_ok=True)
+        out_path = Path(tracks[0]["path"]) if tracks else segment_dir / "full.wav"
+        full_alias = segment_dir / "full.wav"
+        if out_path.exists() and full_alias.resolve() != out_path.resolve():
+            shutil.copy2(out_path, full_alias)
+        duration = max((float(item.get("duration_sec") or 0) for item in tracks), default=0.0)
 
         stats = {
             "chunks": len(chunks),
             "language": language,
             "mode": mode,
-            "speaker": speaker_id if mode == "preset" else None,
+            "speaker": voice_list[0]["id"] if mode == "preset" and voice_list else (speaker_id if mode == "preset" else None),
+            "speakers": [str(item.get("name") or item.get("id")) for item in voice_list],
             "batch_size": batch_size,
             "elapsed_sec": round(elapsed, 2),
             "audio_sec": round(duration, 2),
             "rtf": round(elapsed / duration, 3) if duration else None,
             "sample_rate": native_sr,
-            "output_path": str(out_path),
+            "output_path": str(full_alias if full_alias.exists() else out_path),
+            "tracks": tracks,
             "segments": segments,
         }
-        self.last_stats = {key: value for key, value in stats.items() if key != "segments"}
+        self.last_stats = {key: value for key, value in stats.items() if key not in {"segments", "tracks"}}
         return stats
 
     def _generate_batch(

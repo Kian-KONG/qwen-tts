@@ -30,6 +30,9 @@ _CJK = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 _NUMBER_MARK = re.compile(
     r"^\s*(?:(?:\d{1,3}[\.\)、:：])|(?:[\(（]\d{1,3}[\)）]))\s*"
 )
+_INLINE_NUMBER = re.compile(
+    r"(?:(?<=\s)|(?<=^))(?:\d{1,3}[\.\)、:：]|[\(（]\d{1,3}[\)）])\s+"
+)
 
 
 def language_meta(language: str) -> dict:
@@ -49,10 +52,12 @@ def max_chars_for(language: str, override: int | None = None) -> int:
 
 
 def split_script(text: str, language: str = "Auto", max_chars: int | None = None) -> list[str]:
-    """Prefer numbered-list items; otherwise fall back to sentence cuts."""
+    """Prefer numbered-list items; otherwise one non-empty line is one clip."""
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not cleaned:
         return []
+
+    cleaned = _break_inline_numbers(cleaned)
 
     numbered = _split_numbered(cleaned)
     if numbered:
@@ -60,19 +65,25 @@ def split_script(text: str, language: str = "Auto", max_chars: int | None = None
 
     limit = max_chars_for(language, max_chars)
     tiny = 12 if is_cjk_language(language) else 24
-    sentences: list[str] = []
-    for line in cleaned.split("\n"):
-        line = _WHITESPACE.sub(" ", line).strip()
-        if line:
-            sentences.extend(_split_sentences(line))
+    lines = [_WHITESPACE.sub(" ", line).strip() for line in cleaned.split("\n")]
+    lines = [line for line in lines if line]
 
     pieces: list[str] = []
-    for sentence in sentences:
-        if len(sentence) <= limit:
-            pieces.append(sentence)
-        else:
-            pieces.extend(_split_long(sentence, limit))
-    return _merge_tiny(pieces, tiny)
+    for line in lines:
+        if len(line) <= limit:
+            pieces.append(line)
+            continue
+        sentences = _split_sentences(line)
+        for sentence in sentences:
+            if len(sentence) <= limit:
+                pieces.append(sentence)
+            else:
+                pieces.extend(_split_long(sentence, limit))
+
+    # Only glue fragments that came from a single paragraph. Separate lines stay separate clips.
+    if len(lines) == 1:
+        return _merge_tiny(pieces, tiny)
+    return [item for item in pieces if item]
 
 
 def preview_segments(text: str, language: str = "Auto") -> list[dict]:
@@ -87,6 +98,22 @@ def to_numbered_script(items: list[str]) -> str:
         if body:
             lines.append(f"{index}. {body}")
     return "\n".join(lines)
+
+
+def _break_inline_numbers(text: str) -> str:
+    """Turn '1. foo 2. bar' on one line into two numbered lines."""
+    rebuilt: list[str] = []
+    for raw in text.split("\n"):
+        marks = list(_INLINE_NUMBER.finditer(raw))
+        if len(marks) < 2:
+            rebuilt.append(raw)
+            continue
+        for index, match in enumerate(marks):
+            end = marks[index + 1].start() if index + 1 < len(marks) else len(raw)
+            piece = raw[match.start() : end].strip()
+            if piece:
+                rebuilt.append(piece)
+    return "\n".join(rebuilt)
 
 
 def _split_numbered(text: str) -> list[str]:

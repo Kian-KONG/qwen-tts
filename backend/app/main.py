@@ -83,21 +83,40 @@ def _job_full_wav(job_id: str) -> Path:
     raise HTTPException(status_code=404, detail="Job not found")
 
 
-def _job_segment_wav(job_id: str, index: int) -> Path:
+def _job_item_list(job_id: str, key: str) -> list[dict]:
     try:
         job = runner.get(job_id)
         if job.status == "done":
-            for item in job.stats.get("segments") or []:
-                if int(item["index"]) == index:
-                    path = Path(item["path"])
-                    if path.exists():
-                        return path
+            return list(job.stats.get(key) or [])
     except KeyError:
         pass
+    try:
+        return list(load_record(job_id).get(key) or [])
+    except KeyError:
+        return []
+
+
+def _job_segment_wav(job_id: str, index: int) -> tuple[Path, str]:
+    for item in _job_item_list(job_id, "segments"):
+        if int(item.get("index") or 0) != index:
+            continue
+        path = Path(item.get("path") or "")
+        if path.exists():
+            return path, str(item.get("filename") or path.name)
     path = OUTPUT_DIR / job_id / f"seg_{index:03d}.wav"
     if path.exists():
-        return path
+        return path, path.name
     raise HTTPException(status_code=404, detail="Segment not found")
+
+
+def _job_track_wav(job_id: str, index: int) -> tuple[Path, str]:
+    for item in _job_item_list(job_id, "tracks"):
+        if int(item.get("index") or 0) != index:
+            continue
+        path = Path(item.get("path") or "")
+        if path.exists():
+            return path, str(item.get("filename") or path.name)
+    raise HTTPException(status_code=404, detail="Track not found")
 
 
 @asynccontextmanager
@@ -161,6 +180,52 @@ def _normalize_speaker(speaker: str | None) -> str:
     return value
 
 
+def _parse_id_list(*values: Optional[str]) -> list[str]:
+    seen: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        for item in str(value).replace(";", ",").split(","):
+            token = item.strip()
+            if token and token not in seen:
+                seen.append(token)
+    return seen
+
+
+def _preset_voices(ids: list[str]) -> list[dict]:
+    if not ids:
+        ids = [DEFAULT_SPEAKER]
+    voices = []
+    for speaker_id in ids:
+        if speaker_id not in SPEAKER_BY_ID:
+            raise HTTPException(status_code=400, detail=f"Unknown speaker: {speaker_id}")
+        voices.append({"id": speaker_id, "name": SPEAKER_BY_ID[speaker_id]["label"], "kind": "preset"})
+    return voices
+
+
+def _clone_voices(ids: list[str], ref_audio: str = "", ref_text: str = "") -> list[dict]:
+    if ids:
+        result = []
+        for voice_id in ids:
+            profile = voices.get_voice(voice_id)
+            result.append(
+                {
+                    "id": profile["id"],
+                    "name": profile.get("name") or profile["id"],
+                    "kind": "clone",
+                    "ref_audio": profile["ref_audio"],
+                    "ref_text": profile["ref_text"],
+                }
+            )
+        return result
+    if ref_audio and ref_text:
+        return [{"id": "clone", "name": "克隆", "kind": "clone", "ref_audio": ref_audio, "ref_text": ref_text}]
+    raise HTTPException(
+        status_code=400,
+        detail="Select a saved clone voice or upload reference audio",
+    )
+
+
 def _current_model_id() -> str:
     if engine.mode == "design":
         return DESIGN_MODEL_ID
@@ -190,6 +255,8 @@ class JobRequest(BaseModel):
     mode: str = "preset"
     instruct: Optional[str] = None
     speaker: Optional[str] = None
+    speakers: Optional[str] = None
+    voice_ids: Optional[str] = None
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -406,6 +473,8 @@ async def api_create_job(
     mode: str = Form("preset"),
     instruct: Optional[str] = Form(None),
     speaker: Optional[str] = Form(None),
+    speakers: Optional[str] = Form(None),
+    voice_ids: Optional[str] = Form(None),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
@@ -414,14 +483,17 @@ async def api_create_job(
     job_mode = _normalize_mode(mode)
     description = (instruct or "").strip()
     speaker_id = ""
+    job_voices: list[dict] = []
     temp_ref: Optional[Path] = None
     try:
         if job_mode == "preset":
-            speaker_id = _normalize_speaker(speaker or voice_id)
+            job_voices = _preset_voices(_parse_id_list(speakers, speaker, voice_id))
+            speaker_id = str(job_voices[0]["id"])
             audio_path, transcript = "", ""
         elif job_mode == "design":
             if not description:
                 raise HTTPException(status_code=400, detail="instruct is required for described voices")
+            job_voices = [{"id": "design", "name": "描述音色", "kind": "design"}]
             audio_path, transcript = "", ""
         elif ref_audio is not None and ref_audio.filename:
             suffix = Path(ref_audio.filename).suffix or ".wav"
@@ -431,8 +503,10 @@ async def api_create_job(
             audio_path, transcript = str(temp_ref), (ref_text or "")
             if not transcript.strip():
                 raise HTTPException(status_code=400, detail="ref_text is required with uploaded audio")
+            job_voices = _clone_voices(_parse_id_list(voice_ids, voice_id), audio_path, transcript)
         else:
-            audio_path, transcript = _resolve_clone(voice_id, None, None)
+            job_voices = _clone_voices(_parse_id_list(voice_ids, voice_id))
+            audio_path, transcript = str(job_voices[0]["ref_audio"]), str(job_voices[0]["ref_text"])
         job = runner.submit(
             text=text.strip(),
             ref_audio=audio_path,
@@ -442,6 +516,7 @@ async def api_create_job(
             mode=job_mode,
             instruct=description,
             speaker=speaker_id,
+            voices=job_voices,
         )
         return public_job(job)
     except KeyError:
@@ -463,14 +538,21 @@ def api_create_job_json(payload: JobRequest):
     speaker_id = ""
     try:
         if job_mode == "preset":
-            speaker_id = _normalize_speaker(payload.speaker or payload.voice_id)
+            job_voices = _preset_voices(_parse_id_list(payload.speakers, payload.speaker, payload.voice_id))
+            speaker_id = str(job_voices[0]["id"])
             audio_path, transcript = "", ""
         elif job_mode == "design":
             if not description:
                 raise HTTPException(status_code=400, detail="instruct is required for described voices")
+            job_voices = [{"id": "design", "name": "描述音色", "kind": "design"}]
             audio_path, transcript = "", ""
         else:
-            audio_path, transcript = _resolve_clone(payload.voice_id, payload.ref_audio, payload.ref_text)
+            job_voices = _clone_voices(
+                _parse_id_list(payload.voice_ids, payload.voice_id),
+                payload.ref_audio or "",
+                payload.ref_text or "",
+            )
+            audio_path, transcript = str(job_voices[0]["ref_audio"]), str(job_voices[0]["ref_text"])
     except KeyError:
         raise HTTPException(status_code=404, detail="Voice not found")
     job = runner.submit(
@@ -482,6 +564,7 @@ def api_create_job_json(payload: JobRequest):
         mode=job_mode,
         instruct=description,
         speaker=speaker_id,
+        voices=job_voices,
     )
     return public_job(job)
 
@@ -534,7 +617,14 @@ def api_job_audio(job_id: str, download: bool = False):
 
 @app.get("/api/jobs/{job_id}/segments/{index}/audio")
 def api_job_segment_audio(job_id: str, index: int, download: bool = False):
-    return _wav_response(_job_segment_wav(job_id, index), f"{job_id}_{index:03d}.wav", download)
+    path, filename = _job_segment_wav(job_id, index)
+    return _wav_response(path, filename, download)
+
+
+@app.get("/api/jobs/{job_id}/tracks/{index}/audio")
+def api_job_track_audio(job_id: str, index: int, download: bool = False):
+    path, filename = _job_track_wav(job_id, index)
+    return _wav_response(path, filename, download)
 
 
 @app.get("/api/jobs/{job_id}/zip")
@@ -542,22 +632,26 @@ def api_job_zip(job_id: str):
     full = _job_full_wav(job_id)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(full, f"{job_id}/full.wav")
-        try:
-            job = runner.get(job_id)
-            items = job.stats.get("segments") or []
-        except KeyError:
-            items = []
-        if items:
-            for item in items:
-                path = Path(item["path"])
-                if path.exists():
-                    archive.write(path, f"{job_id}/seg_{int(item['index']):03d}.wav")
-        else:
-            for path in sorted(full.parent.glob("seg_*.wav")):
-                if path.name.endswith(".browser.wav"):
+        added: set[str] = set()
+        for item in _job_item_list(job_id, "segments"):
+            path = Path(item.get("path") or "")
+            name = str(item.get("filename") or path.name)
+            if path.exists() and name not in added:
+                archive.write(path, name)
+                added.add(name)
+        for item in _job_item_list(job_id, "tracks"):
+            path = Path(item.get("path") or "")
+            name = str(item.get("filename") or path.name)
+            if path.exists() and name not in added:
+                archive.write(path, name)
+                added.add(name)
+        if full.exists() and full.name not in added and not _job_item_list(job_id, "tracks"):
+            archive.write(full, full.name)
+        if not added:
+            for path in sorted(full.parent.glob("*.wav")):
+                if ".browser." in path.name or path.name.startswith("."):
                     continue
-                archive.write(path, f"{job_id}/{path.name}")
+                archive.write(path, path.name)
     body = buffer.getvalue()
     return Response(
         body,

@@ -39,7 +39,7 @@ PORT = int(os.getenv("QWEN_TTS_PORT", "8000"))
 BATCH_SIZE = int(os.getenv("QWEN_TTS_BATCH_SIZE", "4"))
 LANGUAGE = os.getenv("QWEN_TTS_LANGUAGE", "Auto")
 OUTPUT_SAMPLE_RATE = int(os.getenv("QWEN_TTS_OUTPUT_SR", "44100"))
-GAP_MS = int(os.getenv("QWEN_TTS_GAP_MS", "180"))
+GAP_MS = int(os.getenv("QWEN_TTS_GAP_MS", "400"))
 MAX_CHUNK_CHARS = int(os.getenv("QWEN_TTS_MAX_CHUNK_CHARS", "0"))
 API_KEY = os.getenv("QWEN_TTS_API_KEY", "")
 

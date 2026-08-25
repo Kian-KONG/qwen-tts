@@ -484,7 +484,33 @@ button.mini {
 }
 
 .clips li p {
-  margin: 6px 0 0;
+  margin: 0 0 8px;
+}
+
+.clip-voices {
+  display: grid;
+  gap: 10px;
+}
+
+.clip-voice {
+  display: grid;
+  gap: 8px;
+}
+
+.clip-voice strong {
+  color: var(--accent);
+}
+
+.tracks {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.player span {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--accent);
 }
 
 .clips audio {

@@ -21,6 +21,16 @@ export type PreviewSegment = {
 export type JobSegment = {
   index: number;
   text: string;
+  voice?: string | null;
+  filename?: string | null;
+  duration_sec?: number | null;
+  url: string;
+};
+
+export type JobTrack = {
+  index: number;
+  voice?: string | null;
+  filename?: string | null;
   duration_sec?: number | null;
   url: string;
 };
@@ -33,6 +43,8 @@ export type Job = {
   download_url?: string | null;
   zip_url?: string | null;
   segments?: JobSegment[];
+  tracks?: JobTrack[];
+  speakers?: string[] | null;
   created_at?: string;
   title?: string;
   local_dir?: string | null;
@@ -117,6 +129,10 @@ function withJobUrls(job: Job): Job {
     segments: job.segments?.map((segment) => ({
       ...segment,
       url: apiUrl(segment.url),
+    })),
+    tracks: job.tracks?.map((track) => ({
+      ...track,
+      url: apiUrl(track.url),
     })),
   };
 }
@@ -265,6 +281,8 @@ export async function createJob(opts: {
   mode?: "clone" | "design" | "preset";
   instruct?: string;
   speaker?: string;
+  speakers?: string[];
+  voiceIds?: string[];
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
@@ -273,7 +291,9 @@ export async function createJob(opts: {
   body.set("mode", opts.mode || "preset");
   if (opts.instruct) body.set("instruct", opts.instruct);
   if (opts.speaker) body.set("speaker", opts.speaker);
+  if (opts.speakers?.length) body.set("speakers", opts.speakers.join(","));
   if (opts.voiceId) body.set("voice_id", opts.voiceId);
+  if (opts.voiceIds?.length) body.set("voice_ids", opts.voiceIds.join(","));
   if (opts.refAudio) body.set("ref_audio", opts.refAudio);
   if (opts.refText) body.set("ref_text", opts.refText);
   const res = await request("/api/jobs", { method: "POST", body });
