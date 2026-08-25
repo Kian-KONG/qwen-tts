@@ -278,11 +278,13 @@ export async function createJob(opts: {
   refText?: string;
   batchSize: number;
   language: string;
-  mode?: "clone" | "design" | "preset";
+  mode?: "clone" | "design" | "preset" | "mixed";
   instruct?: string;
   speaker?: string;
   speakers?: string[];
   voiceIds?: string[];
+  designs?: { id?: string; name: string; instruct: string }[];
+  styleInstruct?: string;
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
@@ -290,10 +292,13 @@ export async function createJob(opts: {
   body.set("language", opts.language);
   body.set("mode", opts.mode || "preset");
   if (opts.instruct) body.set("instruct", opts.instruct);
+  if (opts.styleInstruct) body.set("style_instruct", opts.styleInstruct);
   if (opts.speaker) body.set("speaker", opts.speaker);
   if (opts.speakers?.length) body.set("speakers", opts.speakers.join(","));
   if (opts.voiceId) body.set("voice_id", opts.voiceId);
   if (opts.voiceIds?.length) body.set("voice_ids", opts.voiceIds.join(","));
+  if (opts.designs?.length) body.set("designs", JSON.stringify(opts.designs));
+  else if (opts.mode === "mixed") body.set("designs", "[]");
   if (opts.refAudio) body.set("ref_audio", opts.refAudio);
   if (opts.refText) body.set("ref_text", opts.refText);
   const res = await request("/api/jobs", { method: "POST", body });

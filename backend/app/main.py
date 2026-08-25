@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 import zipfile
 from contextlib import asynccontextmanager
@@ -168,6 +169,8 @@ def _normalize_mode(mode: str | None) -> str:
         return "design"
     if value in {"preset", "custom", "custom_voice"}:
         return "preset"
+    if value in {"mixed", "all", "multi"}:
+        return "mixed"
     if value in {"clone", "base", "icl"}:
         return "clone"
     raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
@@ -193,14 +196,34 @@ def _parse_id_list(*values: Optional[str]) -> list[str]:
 
 
 def _preset_voices(ids: list[str]) -> list[dict]:
-    if not ids:
-        ids = [DEFAULT_SPEAKER]
     voices = []
     for speaker_id in ids:
         if speaker_id not in SPEAKER_BY_ID:
             raise HTTPException(status_code=400, detail=f"Unknown speaker: {speaker_id}")
         voices.append({"id": speaker_id, "name": SPEAKER_BY_ID[speaker_id]["label"], "kind": "preset"})
     return voices
+
+
+def _design_voices(raw: Optional[str], instruct: Optional[str]) -> list[dict]:
+    items: list[dict] = []
+    parsed = []
+    if raw and raw.strip():
+        try:
+            loaded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid designs JSON: {exc}") from exc
+        parsed = loaded if isinstance(loaded, list) else [loaded]
+    for index, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("instruct") or item.get("text") or "").strip()
+        if not prompt:
+            continue
+        name = str(item.get("name") or "").strip() or f"描述音色 {index + 1}"
+        items.append({"id": str(item.get("id") or f"design-{index + 1}"), "name": name, "kind": "design", "instruct": prompt})
+    if not items and (instruct or "").strip():
+        items.append({"id": "design", "name": "描述音色", "kind": "design", "instruct": instruct.strip()})
+    return items
 
 
 def _clone_voices(ids: list[str], ref_audio: str = "", ref_text: str = "") -> list[dict]:
@@ -224,6 +247,70 @@ def _clone_voices(ids: list[str], ref_audio: str = "", ref_text: str = "") -> li
         status_code=400,
         detail="Select a saved clone voice or upload reference audio",
     )
+
+
+def _assemble_job_voices(
+    mode: str,
+    *,
+    speakers: Optional[str] = None,
+    speaker: Optional[str] = None,
+    voice_id: Optional[str] = None,
+    voice_ids: Optional[str] = None,
+    designs: Optional[str] = None,
+    instruct: Optional[str] = None,
+    style_instruct: Optional[str] = None,
+    ref_audio: str = "",
+    ref_text: str = "",
+) -> tuple[str, list[dict], str, str, str, str]:
+    preset_ids = _parse_id_list(speakers, speaker)
+    clone_ids = _parse_id_list(voice_ids)
+    if voice_id:
+        if voice_id in SPEAKER_BY_ID and mode == "preset" and voice_id not in preset_ids:
+            preset_ids.append(voice_id)
+        elif voice_id not in SPEAKER_BY_ID and voice_id not in clone_ids:
+            clone_ids.append(voice_id)
+
+    style = (style_instruct or "").strip()
+    if mode == "preset" and not style:
+        style = (instruct or "").strip()
+
+    job_voices: list[dict] = []
+    for item in _preset_voices(preset_ids):
+        if style:
+            item["style"] = style
+        job_voices.append(item)
+    if mode == "design":
+        job_voices.extend(_design_voices(designs, instruct))
+    elif mode == "mixed":
+        job_voices.extend(_design_voices(designs if designs is not None else None, None))
+    else:
+        job_voices.extend(_design_voices(designs, None))
+
+    audio_path, transcript = "", ""
+    if clone_ids or ref_audio:
+        clones = _clone_voices(clone_ids, ref_audio, ref_text)
+        job_voices.extend(clones)
+        audio_path = str(clones[0]["ref_audio"])
+        transcript = str(clones[0]["ref_text"])
+
+    if not job_voices:
+        if mode == "design":
+            raise HTTPException(status_code=400, detail="instruct is required for described voices")
+        if mode == "clone":
+            raise HTTPException(
+                status_code=400,
+                detail="Select a saved clone voice or upload reference audio",
+            )
+        job_voices = _preset_voices([DEFAULT_SPEAKER])
+
+    kinds = list(dict.fromkeys(str(item.get("kind")) for item in job_voices))
+    job_mode = kinds[0] if len(kinds) == 1 else "mixed"
+    speaker_id = next((str(item["id"]) for item in job_voices if item.get("kind") == "preset"), "")
+    description = next(
+        (str(item.get("instruct") or "") for item in job_voices if item.get("kind") == "design"),
+        (instruct or style or ""),
+    )
+    return job_mode, job_voices, speaker_id, audio_path, transcript, description
 
 
 def _current_model_id() -> str:
@@ -257,6 +344,8 @@ class JobRequest(BaseModel):
     speaker: Optional[str] = None
     speakers: Optional[str] = None
     voice_ids: Optional[str] = None
+    designs: Optional[str] = None
+    style_instruct: Optional[str] = None
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -475,38 +564,41 @@ async def api_create_job(
     speaker: Optional[str] = Form(None),
     speakers: Optional[str] = Form(None),
     voice_ids: Optional[str] = Form(None),
+    designs: Optional[str] = Form(None),
+    style_instruct: Optional[str] = Form(None),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
         raise HTTPException(status_code=400, detail="text is required")
 
-    job_mode = _normalize_mode(mode)
-    description = (instruct or "").strip()
+    requested_mode = _normalize_mode(mode)
     speaker_id = ""
     job_voices: list[dict] = []
     temp_ref: Optional[Path] = None
+    audio_path, transcript = "", ""
+    description = (instruct or "").strip()
     try:
-        if job_mode == "preset":
-            job_voices = _preset_voices(_parse_id_list(speakers, speaker, voice_id))
-            speaker_id = str(job_voices[0]["id"])
-            audio_path, transcript = "", ""
-        elif job_mode == "design":
-            if not description:
-                raise HTTPException(status_code=400, detail="instruct is required for described voices")
-            job_voices = [{"id": "design", "name": "描述音色", "kind": "design"}]
-            audio_path, transcript = "", ""
-        elif ref_audio is not None and ref_audio.filename:
+        upload_path, upload_text = "", ""
+        if ref_audio is not None and ref_audio.filename:
             suffix = Path(ref_audio.filename).suffix or ".wav"
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(await ref_audio.read())
                 temp_ref = Path(tmp.name)
-            audio_path, transcript = str(temp_ref), (ref_text or "")
-            if not transcript.strip():
+            upload_path, upload_text = str(temp_ref), (ref_text or "")
+            if not upload_text.strip():
                 raise HTTPException(status_code=400, detail="ref_text is required with uploaded audio")
-            job_voices = _clone_voices(_parse_id_list(voice_ids, voice_id), audio_path, transcript)
-        else:
-            job_voices = _clone_voices(_parse_id_list(voice_ids, voice_id))
-            audio_path, transcript = str(job_voices[0]["ref_audio"]), str(job_voices[0]["ref_text"])
+        job_mode, job_voices, speaker_id, audio_path, transcript, description = _assemble_job_voices(
+            requested_mode,
+            speakers=speakers,
+            speaker=speaker,
+            voice_id=voice_id,
+            voice_ids=voice_ids,
+            designs=designs,
+            instruct=instruct,
+            style_instruct=style_instruct,
+            ref_audio=upload_path,
+            ref_text=upload_text,
+        )
         job = runner.submit(
             text=text.strip(),
             ref_audio=audio_path,
@@ -533,26 +625,19 @@ async def api_create_job(
 
 @app.post("/api/jobs/json")
 def api_create_job_json(payload: JobRequest):
-    job_mode = _normalize_mode(payload.mode)
-    description = (payload.instruct or "").strip()
-    speaker_id = ""
     try:
-        if job_mode == "preset":
-            job_voices = _preset_voices(_parse_id_list(payload.speakers, payload.speaker, payload.voice_id))
-            speaker_id = str(job_voices[0]["id"])
-            audio_path, transcript = "", ""
-        elif job_mode == "design":
-            if not description:
-                raise HTTPException(status_code=400, detail="instruct is required for described voices")
-            job_voices = [{"id": "design", "name": "描述音色", "kind": "design"}]
-            audio_path, transcript = "", ""
-        else:
-            job_voices = _clone_voices(
-                _parse_id_list(payload.voice_ids, payload.voice_id),
-                payload.ref_audio or "",
-                payload.ref_text or "",
-            )
-            audio_path, transcript = str(job_voices[0]["ref_audio"]), str(job_voices[0]["ref_text"])
+        job_mode, job_voices, speaker_id, audio_path, transcript, description = _assemble_job_voices(
+            _normalize_mode(payload.mode),
+            speakers=payload.speakers,
+            speaker=payload.speaker,
+            voice_id=payload.voice_id,
+            voice_ids=payload.voice_ids,
+            designs=payload.designs,
+            instruct=payload.instruct,
+            style_instruct=payload.style_instruct,
+            ref_audio=payload.ref_audio or "",
+            ref_text=payload.ref_text or "",
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="Voice not found")
     job = runner.submit(

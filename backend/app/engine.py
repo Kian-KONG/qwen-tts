@@ -29,7 +29,21 @@ def normalize_engine_mode(mode: str | None) -> str:
         return "design"
     if value in {"preset", "custom", "custom_voice"}:
         return "preset"
+    if value in {"mixed", "all", "multi"}:
+        return "mixed"
     return "clone"
+
+
+def _voice_kind(item: dict, fallback: str = "preset") -> str:
+    raw = str(item.get("kind") or "").strip().lower()
+    if raw in {"design", "voice_design", "describe", "description"}:
+        return "design"
+    if raw in {"preset", "custom", "custom_voice"}:
+        return "preset"
+    if raw in {"clone", "base", "icl"}:
+        return "clone"
+    mode = normalize_engine_mode(fallback)
+    return "preset" if mode == "mixed" else mode
 
 
 class TTSEngine:
@@ -66,6 +80,8 @@ class TTSEngine:
 
         asr_engine.unload_unlocked()
         self.unload_unlocked()
+        if mode == "mixed":
+            mode = "preset"
         if mode == "design":
             if not _looks_like_model(DESIGN_MODEL_DIR):
                 raise FileNotFoundError(
@@ -108,11 +124,13 @@ class TTSEngine:
         if not chunks:
             raise ValueError("Script is empty after splitting")
         speaker_id = (speaker or DEFAULT_SPEAKER).strip()
-        voice_list = [item for item in (voices or []) if item.get("id") or item.get("name")]
+        voice_list = [item for item in (voices or []) if item.get("id") or item.get("name") or item.get("instruct")]
         if not voice_list:
             if mode == "design":
-                voice_list = [{"id": "design", "name": "描述音色", "kind": "design"}]
-            elif mode == "preset":
+                voice_list = [{"id": "design", "name": "描述音色", "kind": "design", "instruct": instruct}]
+            elif mode == "clone":
+                voice_list = [{"id": "clone", "name": "克隆", "kind": "clone"}]
+            else:
                 voice_list = [
                     {
                         "id": speaker_id,
@@ -120,21 +138,24 @@ class TTSEngine:
                         "kind": "preset",
                     }
                 ]
-            else:
-                voice_list = [{"id": "clone", "name": "克隆", "kind": "clone"}]
-        if mode == "design":
-            if not instruct.strip():
-                raise ValueError("Voice description is required")
-        elif mode == "preset":
-            for item in voice_list:
+        for item in voice_list:
+            kind = _voice_kind(item, mode)
+            item["kind"] = kind
+            if kind == "design":
+                prompt = str(item.get("instruct") or instruct or "").strip()
+                if not prompt:
+                    raise ValueError("Voice description is required")
+                item["instruct"] = prompt
+                item["name"] = item.get("name") or "描述音色"
+            elif kind == "preset":
                 sid = str(item.get("id") or speaker_id)
                 if sid not in SPEAKER_BY_ID:
                     raise ValueError(f"Unknown speaker: {sid}")
                 item["id"] = sid
                 item["name"] = item.get("name") or SPEAKER_BY_ID[sid]["label"]
-                item["kind"] = "preset"
-        else:
-            for item in voice_list:
+                if instruct.strip() and not item.get("style"):
+                    item["style"] = instruct.strip()
+            else:
                 ref = item.get("ref_audio") or ref_audio
                 transcript = item.get("ref_text") or ref_text
                 if not ref or not Path(ref).exists():
@@ -143,8 +164,14 @@ class TTSEngine:
                     raise ValueError("Reference transcript is required for ICL voice cloning")
                 item["ref_audio"] = str(audio_util.ensure_pcm_wav(ref))
                 item["ref_text"] = str(transcript).strip()
-                item["kind"] = "clone"
                 item["name"] = item.get("name") or item.get("id") or "克隆"
+        kinds = list(dict.fromkeys(_voice_kind(item, mode) for item in voice_list))
+        if len(kinds) > 1:
+            mode = "mixed"
+            order = {"preset": 0, "design": 1, "clone": 2}
+            voice_list.sort(key=lambda item: order.get(str(item.get("kind")), 9))
+        elif kinds:
+            mode = kinds[0]
 
         batch_size = max(1, min(batch_size or BATCH_SIZE, 8))
         started = time.perf_counter()
@@ -160,16 +187,21 @@ class TTSEngine:
         n_voices = max(1, len(voice_list))
 
         with self.lock:
-            self._load_unlocked(mode)
             for voice_offset, voice in enumerate(voice_list):
                 wavs: list[np.ndarray] = []
+                kind = _voice_kind(voice, mode)
                 sid = str(voice.get("id") or speaker_id)
+                self._load_unlocked(kind)
                 for offset in range(0, len(chunks), batch_size):
                     batch = chunks[offset : offset + batch_size]
-                    if mode == "design":
-                        collected = self._generate_design_batch(batch, style, lang_code)
-                    elif mode == "preset":
-                        collected = self._generate_preset_batch(batch, sid, lang_code, style)
+                    if kind == "design":
+                        collected = self._generate_design_batch(
+                            batch, str(voice.get("instruct") or style), lang_code
+                        )
+                    elif kind == "preset":
+                        collected = self._generate_preset_batch(
+                            batch, sid, lang_code, str(voice.get("style") or style)
+                        )
                     else:
                         collected = self._generate_batch(
                             batch,
@@ -238,7 +270,10 @@ class TTSEngine:
             "chunks": len(chunks),
             "language": language,
             "mode": mode,
-            "speaker": voice_list[0]["id"] if mode == "preset" and voice_list else (speaker_id if mode == "preset" else None),
+            "speaker": next(
+                (str(item.get("id")) for item in voice_list if item.get("kind") == "preset"),
+                speaker_id if mode == "preset" else None,
+            ),
             "speakers": [str(item.get("name") or item.get("id")) for item in voice_list],
             "batch_size": batch_size,
             "elapsed_sec": round(elapsed, 2),

@@ -27,6 +27,7 @@ import {
   type Transcript,
   type Voice,
 } from "./api";
+import { useHashRoute } from "./route";
 
 const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
 2. We shipped faster voice cloning for internal videos, running entirely on a Mac mini.
@@ -103,17 +104,20 @@ const ASR_STAGES: Record<string, string> = {
   error: "失败",
 };
 
-const VOICE_MODE_KEY = "qwen-tts-voice-mode";
 const VOICE_ID_KEY = "qwen-tts-voice-id";
 const VOICE_IDS_KEY = "qwen-tts-voice-ids";
 const SPEAKERS_KEY = "qwen-tts-speakers";
+const DESIGNS_KEY = "qwen-tts-designs";
 const JOB_ID_KEY = "qwen-tts-job-id";
 
 const MODE_LABEL: Record<string, string> = {
   preset: "预设",
   design: "描述",
   clone: "克隆",
+  mixed: "混合",
 };
+
+type DesignPick = { id: string; name: string; instruct: string };
 
 function stored(key: string, fallback: string): string {
   try {
@@ -169,9 +173,14 @@ function groupSegments(segments: JobSegment[]): { text: string; clips: JobSegmen
   return groups;
 }
 
-function storedVoiceMode(): "preset" | "design" | "clone" {
-  const value = stored(VOICE_MODE_KEY, "preset");
-  return value === "design" || value === "clone" || value === "preset" ? value : "preset";
+function storedJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 function FileField({
@@ -209,6 +218,7 @@ function FileField({
 }
 
 export default function App() {
+  const [route, go] = useHashRoute();
   const [health, setHealth] = useState<Health | null>(null);
   const [languages, setLanguages] = useState<Language[]>([]);
   const [language, setLanguage] = useState("Auto");
@@ -223,7 +233,10 @@ export default function App() {
     return one ? [one] : [];
   });
   const [voiceName, setVoiceName] = useState("Studio A");
-  const [voiceMode, setVoiceMode] = useState<"preset" | "design" | "clone">(storedVoiceMode);
+  const [designs, setDesigns] = useState<DesignPick[]>(() => {
+    const raw = storedJson<DesignPick[]>(DESIGNS_KEY, []);
+    return Array.isArray(raw) ? raw.filter((item) => item?.instruct && item?.name) : [];
+  });
   const [instruct, setInstruct] = useState(VOICE_PRESETS[0].text);
   const [styleInstruct, setStyleInstruct] = useState("");
   const [refFile, setRefFile] = useState<File | null>(null);
@@ -247,12 +260,40 @@ export default function App() {
   const voicePlayerRef = useRef<HTMLAudioElement | null>(null);
 
   const filledSegments = useMemo(() => parseMarkdownList(markdown), [markdown]);
-  const voiceCount =
-    voiceMode === "preset"
-      ? selectedSpeakers.length
-      : voiceMode === "clone"
-        ? selectedVoiceIds.length || (refFile && refText.trim() ? 1 : 0)
-        : 1;
+  const pendingClone = Boolean(!selectedVoiceIds.length && refFile && refText.trim());
+  const roster = useMemo(() => {
+    const items: { key: string; kind: "preset" | "design" | "clone"; name: string; detail?: string; remove: () => void }[] = [];
+    for (const id of selectedSpeakers) {
+      const speaker = speakers.find((item) => item.id === id);
+      items.push({
+        key: `preset:${id}`,
+        kind: "preset",
+        name: speaker?.label || id,
+        detail: speaker?.description,
+        remove: () => setSelectedSpeakers((current) => current.filter((item) => item !== id)),
+      });
+    }
+    for (const design of designs) {
+      items.push({
+        key: `design:${design.id}`,
+        kind: "design",
+        name: design.name,
+        detail: design.instruct.slice(0, 42),
+        remove: () => setDesigns((current) => current.filter((item) => item.id !== design.id)),
+      });
+    }
+    for (const id of selectedVoiceIds) {
+      const voice = voices.find((item) => item.id === id);
+      items.push({
+        key: `clone:${id}`,
+        kind: "clone",
+        name: voice?.name || id,
+        remove: () => setSelectedVoiceIds((current) => current.filter((item) => item !== id)),
+      });
+    }
+    return items;
+  }, [selectedSpeakers, speakers, designs, selectedVoiceIds, voices]);
+  const voiceCount = roster.length + (pendingClone ? 1 : 0);
 
   async function refresh() {
     try {
@@ -266,10 +307,7 @@ export default function App() {
       setVoices(nextVoices);
       setLanguages(nextLanguages);
       setSpeakers(nextSpeakers.data);
-      setSelectedSpeakers((current) => {
-        const valid = current.filter((id) => nextSpeakers.data.some((item) => item.id === id));
-        return valid.length ? valid : [nextSpeakers.default || "Ryan"];
-      });
+      setSelectedSpeakers((current) => current.filter((id) => nextSpeakers.data.some((item) => item.id === id)));
       setSelectedVoiceIds((current) => current.filter((id) => nextVoices.some((item) => item.id === id)));
       setVoiceId((current) => {
         if (current && nextVoices.some((item) => item.id === current)) return current;
@@ -297,14 +335,14 @@ export default function App() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(VOICE_MODE_KEY, voiceMode);
       if (voiceId) window.localStorage.setItem(VOICE_ID_KEY, voiceId);
       window.localStorage.setItem(SPEAKERS_KEY, selectedSpeakers.join(","));
       window.localStorage.setItem(VOICE_IDS_KEY, selectedVoiceIds.join(","));
+      window.localStorage.setItem(DESIGNS_KEY, JSON.stringify(designs));
     } catch {
       /* ignore quota / private mode */
     }
-  }, [voiceMode, voiceId, selectedSpeakers, selectedVoiceIds]);
+  }, [voiceId, selectedSpeakers, selectedVoiceIds, designs]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error") return;
@@ -347,6 +385,7 @@ export default function App() {
     const asrId = new URLSearchParams(window.location.search).get("asr");
     const jobId = new URLSearchParams(window.location.search).get("job");
     if (asrId) {
+      go("transcribe");
       void (async () => {
         try {
           const next = await getTranscribeJob(asrId);
@@ -473,13 +512,14 @@ export default function App() {
         ? asrJob.segments.map((item) => `${item.index}. ${item.text}`).join("\n")
         : toMarkdown(parseMarkdownList(asrText));
     setMarkdown(next);
+    go("dub");
     setMessage("已填入配音文稿");
   }
 
   function applyAsrToClone() {
     if (!asrText.trim()) return;
-    setVoiceMode("clone");
     setRefText(asrText.trim());
+    go("dub");
     setMessage("已填入克隆逐字稿");
   }
 
@@ -505,15 +545,20 @@ export default function App() {
     setBusy(true);
     setMessage("");
     try {
+      const kinds: Array<"preset" | "design" | "clone"> = [];
+      if (selectedSpeakers.length) kinds.push("preset");
+      if (designs.length) kinds.push("design");
+      if (selectedVoiceIds.length || pendingClone) kinds.push("clone");
+      const jobMode = kinds.length > 1 ? "mixed" : kinds[0] || "preset";
       const next = await createJob({
         text: markdown,
-        mode: voiceMode,
-        speakers: voiceMode === "preset" ? selectedSpeakers : undefined,
-        instruct: voiceMode === "design" ? instruct : voiceMode === "preset" ? styleInstruct || undefined : undefined,
-        voiceIds: voiceMode === "clone" && selectedVoiceIds.length ? selectedVoiceIds : undefined,
-        voiceId: voiceMode === "clone" && !selectedVoiceIds.length ? voiceId || undefined : undefined,
-        refAudio: voiceMode === "clone" && !selectedVoiceIds.length && !voiceId ? refFile || undefined : undefined,
-        refText: voiceMode === "clone" && !selectedVoiceIds.length && !voiceId ? refText : undefined,
+        mode: jobMode,
+        speakers: selectedSpeakers,
+        designs,
+        styleInstruct: styleInstruct || undefined,
+        voiceIds: selectedVoiceIds.length ? selectedVoiceIds : undefined,
+        refAudio: pendingClone ? refFile || undefined : undefined,
+        refText: pendingClone ? refText : undefined,
         batchSize,
         language,
       });
@@ -532,12 +577,26 @@ export default function App() {
   }
 
   function toggleSpeaker(id: string) {
-    setSelectedSpeakers((current) => toggleId(current, id, true));
+    setSelectedSpeakers((current) => toggleId(current, id));
   }
 
   function toggleCloneVoice(id: string) {
     setSelectedVoiceIds((current) => toggleId(current, id));
     setVoiceId(id);
+  }
+
+  function addDesign() {
+    const text = instruct.trim();
+    if (!text) {
+      setMessage("请先填写音色描述");
+      return;
+    }
+    if (designs.some((item) => item.instruct === text)) {
+      setMessage("这个描述已经在已选音色里");
+      return;
+    }
+    const name = VOICE_PRESETS.find((item) => item.text === text)?.label || `描述音色 ${designs.length + 1}`;
+    setDesigns((current) => [...current, { id: `d-${Date.now()}`, name, instruct: text }]);
   }
 
   async function togglePlayVoice(id: string) {
@@ -647,34 +706,50 @@ export default function App() {
         <div>
           <p className="kicker">Multilingual Dubbing</p>
           <h1>Qwen3-TTS 配音台</h1>
+          <nav className="nav">
+            <button type="button" className={route === "dub" ? "active" : "ghost"} onClick={() => go("dub")}>
+              配音
+            </button>
+            <button type="button" className={route === "transcribe" ? "active" : "ghost"} onClick={() => go("transcribe")}>
+              转写
+            </button>
+          </nav>
         </div>
         <div className="status">
           <span className={health?.model_loaded || health?.model_dir_ready ? "dot on" : "dot"} />
           <div>
             <strong>
-              {(health?.current_mode === "design"
-                ? health?.design_model_id
-                : health?.current_mode === "preset"
-                  ? health?.custom_model_id
-                  : health?.model_id
-              )?.split("/").pop() || "等待模型"}
+              {route === "transcribe"
+                ? health?.asr_model_id?.split("/").pop() || "Qwen3-ASR"
+                : (
+                    health?.current_mode === "design"
+                      ? health?.design_model_id
+                      : health?.current_mode === "preset"
+                        ? health?.custom_model_id
+                        : health?.model_id
+                  )?.split("/").pop() || "等待模型"}
             </strong>
             <p>
-              {health?.model_loaded ? "已加载" : "未加载"}
-              {health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}
-              {health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}
-              {health?.asr_model_ready ? " · 转写可用" : " · 转写未下载"} · {language} · batch {batchSize}
+              {route === "transcribe"
+                ? health?.asr_loaded
+                  ? "转写已加载"
+                  : health?.asr_model_ready
+                    ? "转写就绪"
+                    : "转写未下载"
+                : `${health?.model_loaded ? "已加载" : "未加载"}${health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}${health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}`}
             </p>
           </div>
         </div>
       </header>
+      {message ? <p className="flash">{message}</p> : null}
 
+      {route === "transcribe" ? (
       <section className="panel asr-panel">
         <div className="asr-head">
           <div>
             <h2>语音转文字</h2>
             <p className="hint">
-              独立转写区，不和配音抢界面。上传音频后会显示进度；第一次会先卸载 TTS、加载 Qwen3-ASR 1.7B。
+              上传音频后会显示进度；第一次会先卸载 TTS、加载 Qwen3-ASR 1.7B。转写完成后可填入配音页。
               {health?.asr_model_ready ? "" : " 当前还没下载 ASR 权重，请先运行 `make download-asr`。"}
             </p>
           </div>
@@ -750,166 +825,195 @@ export default function App() {
           </div>
         </div>
       </section>
-
+      ) : (
+      <>
       <main className="grid">
         <section className="panel">
           <h2>1. 音色</h2>
-          <div className="mode-switch">
-            <button type="button" className={voiceMode === "preset" ? "active" : "ghost"} onClick={() => setVoiceMode("preset")}>
-              预设说话人
-            </button>
-            <button type="button" className={voiceMode === "design" ? "active" : "ghost"} onClick={() => setVoiceMode("design")}>
-              描述音色
-            </button>
-            <button type="button" className={voiceMode === "clone" ? "active" : "ghost"} onClick={() => setVoiceMode("clone")}>
-              声音克隆{voices.length ? `（${voices.length}）` : ""}
+          <p className="hint">
+            预设、描述和克隆可以同时选。同一文稿会为每个已选音色各生成一段短音频，文件名是「文本 - 声色.wav」。
+          </p>
+          <div className="roster">
+            <div className="roster-head">
+              <strong>已选音色</strong>
+              <span>{voiceCount} 个</span>
+            </div>
+            {roster.length || pendingClone ? (
+              <div className="roster-list">
+                {roster.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className="roster-chip"
+                    onClick={item.remove}
+                    title="移出已选"
+                  >
+                    <small>{MODE_LABEL[item.kind]}</small>
+                    {item.name}
+                    <span aria-hidden="true">×</span>
+                  </button>
+                ))}
+                {pendingClone ? (
+                  <span className="roster-chip pending">
+                    <small>克隆</small>
+                    未保存参考音频
+                  </span>
+                ) : null}
+              </div>
+            ) : (
+              <p className="hint">还没有选音色。从下面三类里点选，描述音色点「加入已选」。</p>
+            )}
+          </div>
+
+          <div className="voice-block">
+            <h3>预设说话人</h3>
+            <p className="hint">
+              可多选。男女声请同时点选，例如 Ryan + Vivian。
+              {health?.custom_model_ready ? "" : " 当前还没下载 CustomVoice 权重，请先运行 `make download-custom`。"}
+            </p>
+            <div className="speaker-grid">
+              {speakers.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={selectedSpeakers.includes(item.id) ? "speaker on" : "speaker"}
+                  aria-pressed={selectedSpeakers.includes(item.id)}
+                  onClick={() => toggleSpeaker(item.id)}
+                >
+                  {item.label}
+                  <small>
+                    {item.native}
+                    {item.description ? ` · ${item.description}` : ""}
+                  </small>
+                </button>
+              ))}
+            </div>
+            <label>
+              预设语气（可选）
+              <input
+                value={styleInstruct}
+                onChange={(e) => setStyleInstruct(e.target.value)}
+                placeholder="Very happy and excited."
+              />
+            </label>
+          </div>
+
+          <div className="voice-block">
+            <h3>描述音色</h3>
+            <p className="hint">
+              不用上传参考音频。写好描述后点「加入已选」，可以加多条。
+              {health?.design_model_ready ? "" : " 当前还没下载 VoiceDesign 权重，请先运行 `make download-design`。"}
+            </p>
+            <div className="chips">
+              {VOICE_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  className={instruct === preset.text ? "chip on" : "chip"}
+                  onClick={() => setInstruct(preset.text)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <label>
+              音色描述
+              <textarea
+                rows={4}
+                value={instruct}
+                onChange={(e) => setInstruct(e.target.value)}
+                placeholder="A calm adult male narrator, warm mid pitch, clear studio diction..."
+              />
+            </label>
+            <button type="button" className="ghost" onClick={addDesign} disabled={!instruct.trim()}>
+              加入已选
             </button>
           </div>
-          {voiceMode === "preset" ? (
-            <div className="stack">
-              <p className="hint">
-                可多选。同一文稿会为每个音色各生成一段短音频，下载文件名是「文本 - 声色.wav」。男女声请同时点选，例如 Ryan + Vivian。
-                {health?.custom_model_ready ? "" : " 当前还没下载 CustomVoice 权重，请先运行 `make download-custom`。"}
-              </p>
-              <div className="speaker-grid">
-                {speakers.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={selectedSpeakers.includes(item.id) ? "speaker on" : "speaker"}
-                    aria-pressed={selectedSpeakers.includes(item.id)}
-                    onClick={() => toggleSpeaker(item.id)}
-                  >
-                    {item.label}
-                    <small>
-                      {item.native}
-                      {item.description ? ` · ${item.description}` : ""}
-                    </small>
-                  </button>
-                ))}
-              </div>
-              <label>
-                语气（可选）
-                <input
-                  value={styleInstruct}
-                  onChange={(e) => setStyleInstruct(e.target.value)}
-                  placeholder="Very happy and excited."
+
+          <div className="voice-block">
+            <h3>声音克隆{voices.length ? `（${voices.length}）` : ""}</h3>
+            <p className="hint">
+              可多选。上传过的音色保存在本机 `data/voices/`。新音色录 3–10 秒干净人声，并写上逐字稿。
+            </p>
+            {voices.length ? (
+              <div className="stack">
+                <audio
+                  ref={voicePlayerRef}
+                  className="voice-player"
+                  onEnded={() => setPlayingVoiceId(null)}
                 />
-              </label>
-            </div>
-          ) : voiceMode === "design" ? (
-            <div className="stack">
-              <p className="hint">
-                不用上传参考音频。用一段话描述年龄、性别、口音和气质即可直接配音。
-                {health?.design_model_ready ? "" : " 当前还没下载 VoiceDesign 权重，请先运行 `make download-design`。"}
-              </p>
-              <div className="chips">
-                {VOICE_PRESETS.map((preset) => (
-                  <button
-                    key={preset.label}
-                    type="button"
-                    className={instruct === preset.text ? "chip on" : "chip"}
-                    onClick={() => setInstruct(preset.text)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-              <label>
-                音色描述
-                <textarea
-                  rows={5}
-                  value={instruct}
-                  onChange={(e) => setInstruct(e.target.value)}
-                  placeholder="A calm adult male narrator, warm mid pitch, clear studio diction..."
-                />
-              </label>
-            </div>
-          ) : (
-            <>
-              <p className="hint">
-                克隆音色可多选。上传过的音色保存在本机 `data/voices/`，刷新后仍可点选复用。新音色录 3–10 秒干净人声，并写上逐字稿。
-              </p>
-              {voices.length ? (
-                <div className="stack">
-                  <audio
-                    ref={voicePlayerRef}
-                    className="voice-player"
-                    onEnded={() => setPlayingVoiceId(null)}
-                  />
-                  <div className="voice-list">
-                    {voices.map((voice) => (
-                      <div key={voice.id} className={selectedVoiceIds.includes(voice.id) ? "voice-card on" : "voice-card"}>
-                        <button type="button" className="voice-select" onClick={() => toggleCloneVoice(voice.id)}>
-                          <strong>{voice.name}</strong>
-                          <small>
-                            {voice.duration_sec ? `${voice.duration_sec}s` : "已保存"}
-                            {voice.ref_text ? ` · ${voice.ref_text.slice(0, 36)}` : ""}
-                          </small>
+                <div className="voice-list">
+                  {voices.map((voice) => (
+                    <div key={voice.id} className={selectedVoiceIds.includes(voice.id) ? "voice-card on" : "voice-card"}>
+                      <button type="button" className="voice-select" onClick={() => toggleCloneVoice(voice.id)}>
+                        <strong>{voice.name}</strong>
+                        <small>
+                          {voice.duration_sec ? `${voice.duration_sec}s` : "已保存"}
+                          {voice.ref_text ? ` · ${voice.ref_text.slice(0, 36)}` : ""}
+                        </small>
+                      </button>
+                      <div className="voice-actions">
+                        <button type="button" className="ghost mini" onClick={() => void togglePlayVoice(voice.id)}>
+                          {playingVoiceId === voice.id ? "暂停" : "播放"}
                         </button>
-                        <div className="voice-actions">
-                          <button type="button" className="ghost mini" onClick={() => void togglePlayVoice(voice.id)}>
-                            {playingVoiceId === voice.id ? "暂停" : "播放"}
-                          </button>
-                          <button type="button" className="ghost mini" onClick={() => startRenameVoice(voice)}>
-                            重命名
-                          </button>
-                        </div>
-                        {renamingId === voice.id ? (
-                          <form className="voice-rename" onSubmit={(event) => void onRenameVoice(event)}>
-                            <input
-                              value={renameValue}
-                              onChange={(e) => setRenameValue(e.target.value)}
-                              autoFocus
-                              placeholder="新的音色名称"
-                            />
-                            <button type="submit" disabled={busy || !renameValue.trim()}>
-                              保存
-                            </button>
-                            <button type="button" className="ghost" onClick={() => setRenamingId(null)}>
-                              取消
-                            </button>
-                          </form>
-                        ) : null}
+                        <button type="button" className="ghost mini" onClick={() => startRenameVoice(voice)}>
+                          重命名
+                        </button>
                       </div>
-                    ))}
-                  </div>
+                      {renamingId === voice.id ? (
+                        <form className="voice-rename" onSubmit={(event) => void onRenameVoice(event)}>
+                          <input
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            autoFocus
+                            placeholder="新的音色名称"
+                          />
+                          <button type="submit" disabled={busy || !renameValue.trim()}>
+                            保存
+                          </button>
+                          <button type="button" className="ghost" onClick={() => setRenamingId(null)}>
+                            取消
+                          </button>
+                        </form>
+                      ) : null}
+                    </div>
+                  ))}
                 </div>
-              ) : (
-                <p className="hint">还没有保存过克隆音色。保存一次后会留在本机，下次直接选用。</p>
-              )}
-              <form className="stack" onSubmit={onSaveVoice}>
-                <label>
-                  音色名称
-                  <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
-                </label>
-                <FileField
-                  label="参考音频"
-                  accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
-                  file={refFile}
-                  emptyText="wav / m4a / mp3，3–10 秒"
-                  onChange={setRefFile}
+              </div>
+            ) : (
+              <p className="hint">还没有保存过克隆音色。保存一次后会留在本机，下次直接选用。</p>
+            )}
+            <form className="stack" onSubmit={onSaveVoice}>
+              <label>
+                音色名称
+                <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
+              </label>
+              <FileField
+                label="参考音频"
+                accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
+                file={refFile}
+                emptyText="wav / m4a / mp3，3–10 秒"
+                onChange={setRefFile}
+              />
+              <label>
+                参考音频文字稿
+                <textarea
+                  rows={4}
+                  value={refText}
+                  onChange={(e) => setRefText(e.target.value)}
+                  placeholder="Exactly what the reference clip says."
                 />
-                <label>
-                  参考音频文字稿
-                  <textarea
-                    rows={4}
-                    value={refText}
-                    onChange={(e) => setRefText(e.target.value)}
-                    placeholder="Exactly what the reference clip says."
-                  />
-                </label>
-                <div className="row">
-                  <button type="submit" disabled={busy}>
-                    保存到音色库
-                  </button>
-                  <button type="button" className="ghost" onClick={() => void onDeleteVoice()} disabled={!voiceId}>
-                    删除所选
-                  </button>
-                </div>
-              </form>
-            </>
-          )}
+              </label>
+              <div className="row">
+                <button type="submit" disabled={busy}>
+                  保存到音色库
+                </button>
+                <button type="button" className="ghost" onClick={() => void onDeleteVoice()} disabled={!voiceId}>
+                  删除所选
+                </button>
+              </div>
+            </form>
+          </div>
         </section>
 
         <section className="panel">
@@ -993,9 +1097,10 @@ export default function App() {
               disabled={
                 busy ||
                 filledSegments.length === 0 ||
-                (voiceMode === "preset" && (!selectedSpeakers.length || health?.custom_model_ready === false)) ||
-                (voiceMode === "design" && (!instruct.trim() || health?.design_model_ready === false)) ||
-                (voiceMode === "clone" && !selectedVoiceIds.length && !voiceId && (!refFile || !refText.trim()))
+                voiceCount === 0 ||
+                (selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
+                (designs.length > 0 && health?.design_model_ready === false) ||
+                ((selectedVoiceIds.length > 0 || pendingClone) && health?.model_dir_ready === false)
               }
             >
               {busy
@@ -1131,8 +1236,9 @@ export default function App() {
         ) : history.length ? null : (
           <p className="hint">生成结果会按编号显示在这里。</p>
         )}
-        {message ? <p className="flash">{message}</p> : null}
       </section>
+      </>
+      )}
     </div>
   );
 }

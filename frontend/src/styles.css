@@ -38,6 +38,75 @@ body,
   margin-bottom: 28px;
 }
 
+.nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.nav button.active {
+  background: var(--accent);
+  color: #1a140c;
+}
+
+h3 {
+  margin: 0;
+  font-family: Fraunces, serif;
+  font-size: 18px;
+}
+
+.roster {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 18px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: #141310;
+}
+
+.roster-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  color: var(--muted);
+}
+
+.roster-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.roster-chip,
+button.roster-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--accent);
+  font-weight: 600;
+}
+
+.roster-chip small {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.roster-chip.pending {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.voice-block {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
 .kicker {
   margin: 0 0 6px;
   letter-spacing: 0.16em;
