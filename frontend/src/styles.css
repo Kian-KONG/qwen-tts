@@ -385,6 +385,45 @@ button.mini {
   flex: 1;
 }
 
+.history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.history-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: #141310;
+  border: 1px solid var(--line);
+}
+
+.history-card.on {
+  border-color: var(--accent);
+}
+
+.history-select {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  text-align: left;
+  font-weight: 600;
+}
+
+.history-select small {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.history-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .markdown-editor {
   min-height: 220px;
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -18,6 +18,10 @@ export PYTHONPATH="$ROOT/backend${PYTHONPATH:+:$PYTHONPATH}"
 export QWEN_TTS_HOST="${QWEN_TTS_HOST:-127.0.0.1}"
 export QWEN_TTS_PORT="${QWEN_TTS_PORT:-8000}"
 
+# shellcheck disable=SC1091
+source "$ROOT/scripts/free-port.sh"
+free_listen_port "$QWEN_TTS_PORT"
+
 cleanup() {
   kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
 }

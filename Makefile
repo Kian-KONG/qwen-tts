@@ -19,7 +19,7 @@ help:
 	@echo "  make download-design Download VoiceDesign bf16 (described voice)"
 	@echo "  make download-custom Download CustomVoice bf16 (preset speakers)"
 	@echo "  make download-asr   Download Qwen3-ASR 1.7B bf16 (speech-to-text)"
-	@echo "  make start         Build frontend and serve on :8000"
+	@echo "  make start         Stop anything on :8000, build frontend, serve"
 	@echo "  make dev           Backend + Vite hot reload"
 	@echo "  make health        GET /health"
 	@echo "  make tunnel-setup  Optional: install cloudflared"

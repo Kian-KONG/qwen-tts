@@ -37,6 +37,7 @@ from .config import (
 from .asr import asr_engine, asr_runner, public_asr_job
 from .chunking import preview_segments
 from .engine import engine
+from .history import delete_record, list_disk_jobs, load_record, public_from_record
 from .jobs import public_job, runner
 from .script_import import import_spreadsheet
 
@@ -485,12 +486,45 @@ def api_create_job_json(payload: JobRequest):
     return public_job(job)
 
 
+@app.get("/api/jobs")
+def api_list_jobs():
+    seen: set[str] = set()
+    items = []
+    for job in list(runner.jobs.values()):
+        items.append(public_job(job))
+        seen.add(job.id)
+    for item in list_disk_jobs():
+        if item["id"] in seen:
+            continue
+        items.append(item)
+        seen.add(item["id"])
+    items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    return {"data": items}
+
+
 @app.get("/api/jobs/{job_id}")
 def api_get_job(job_id: str):
     try:
         return public_job(runner.get(job_id))
     except KeyError:
+        pass
+    try:
+        return public_from_record(load_record(job_id))
+    except KeyError:
         raise HTTPException(status_code=404, detail="Job not found")
+
+
+@app.delete("/api/jobs/{job_id}")
+def api_delete_job(job_id: str):
+    try:
+        job = runner.get(job_id)
+        if job.status in {"queued", "running"}:
+            raise HTTPException(status_code=409, detail="任务还在生成，不能删除")
+        runner.forget(job_id)
+    except KeyError:
+        pass
+    delete_record(job_id)
+    return {"ok": True}
 
 
 @app.get("/api/jobs/{job_id}/audio")

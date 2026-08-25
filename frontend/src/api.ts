@@ -33,6 +33,12 @@ export type Job = {
   download_url?: string | null;
   zip_url?: string | null;
   segments?: JobSegment[];
+  created_at?: string;
+  title?: string;
+  local_dir?: string | null;
+  mode?: string | null;
+  speaker?: string | null;
+  text?: string;
   chunks?: number;
   language?: string;
   batch_size?: number;
@@ -277,4 +283,14 @@ export async function createJob(opts: {
 export async function getJob(id: string): Promise<Job> {
   const res = await request(`/api/jobs/${id}`);
   return withJobUrls(await res.json());
+}
+
+export async function listJobs(): Promise<Job[]> {
+  const res = await request("/api/jobs");
+  const data = await res.json();
+  return (data.data ?? []).map((item: Job) => withJobUrls(item));
+}
+
+export async function deleteJob(id: string): Promise<void> {
+  await request(`/api/jobs/${id}`, { method: "DELETE" });
 }

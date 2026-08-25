@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .engine import engine
+from .history import persist_job
 
 
 @dataclass
@@ -49,6 +50,12 @@ class JobRunner:
             raise KeyError(job_id)
         return job
 
+    def forget(self, job_id: str) -> None:
+        with self._cv:
+            if job_id in self._pending:
+                self._pending.remove(job_id)
+            self.jobs.pop(job_id, None)
+
     def _loop(self) -> None:
         while True:
             with self._cv:
@@ -76,6 +83,10 @@ class JobRunner:
                 )
                 job.progress = 1.0
                 job.status = "done"
+                try:
+                    persist_job(job)
+                except Exception:
+                    pass
             except Exception as exc:
                 job.status = "error"
                 job.error = str(exc)
@@ -98,14 +109,20 @@ def public_job(job: Job) -> dict:
     ]
     download = f"/api/jobs/{job.id}/audio" if job.status == "done" else None
     zip_url = f"/api/jobs/{job.id}/zip" if job.status == "done" and segments else None
+    title = next((item["text"].strip()[:48] for item in segments if (item.get("text") or "").strip()), "")
+    if not title:
+        line = (job.text or "").strip().split("\n")[0]
+        title = line.lstrip("0123456789.、)）:： ").strip()[:48]
     return {
         "id": job.id,
         "status": job.status,
         "progress": job.progress,
         "error": job.error,
         "created_at": job.created_at,
+        "title": title,
         "download_url": download,
         "zip_url": zip_url,
+        "local_dir": f"data/output/{job.id}" if job.status == "done" else None,
         "segments": segments,
         **stats,
     }

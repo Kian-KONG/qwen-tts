@@ -26,4 +26,8 @@ if [[ "${BUILD_FRONTEND:-1}" == "1" && -f frontend/package.json ]]; then
   (cd frontend && npm run build)
 fi
 
+# shellcheck disable=SC1091
+source "$ROOT/scripts/free-port.sh"
+free_listen_port "$QWEN_TTS_PORT"
+
 exec python -m uvicorn app.main:app --app-dir "$ROOT/backend" --host "$QWEN_TTS_HOST" --port "$QWEN_TTS_PORT"

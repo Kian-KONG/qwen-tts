@@ -1,15 +1,18 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  API_BASE,
   apiUrl,
   createJob,
   createTranscribeJob,
   createVoice,
+  deleteJob,
   deleteVoice,
   downloadFile,
   getHealth,
   getJob,
   getTranscribeJob,
   importScript,
+  listJobs,
   listLanguages,
   listSpeakers,
   listVoices,
@@ -92,6 +95,13 @@ const ASR_STAGES: Record<string, string> = {
 
 const VOICE_MODE_KEY = "qwen-tts-voice-mode";
 const VOICE_ID_KEY = "qwen-tts-voice-id";
+const JOB_ID_KEY = "qwen-tts-job-id";
+
+const MODE_LABEL: Record<string, string> = {
+  preset: "预设",
+  design: "描述",
+  clone: "克隆",
+};
 
 function stored(key: string, fallback: string): string {
   try {
@@ -166,6 +176,7 @@ export default function App() {
   const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
   const [batchSize, setBatchSize] = useState(4);
   const [job, setJob] = useState<Job | null>(null);
+  const [history, setHistory] = useState<Job[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -190,8 +201,17 @@ export default function App() {
         if (current && nextVoices.some((item) => item.id === current)) return current;
         return nextVoices[0]?.id || "";
       });
+      void refreshHistory();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "无法连接后端");
+    }
+  }
+
+  async function refreshHistory() {
+    try {
+      setHistory(await listJobs());
+    } catch {
+      /* listing is optional while the API is waking up */
     }
   }
 
@@ -220,6 +240,16 @@ export default function App() {
   }, [job?.id, job?.status]);
 
   useEffect(() => {
+    if (job?.status !== "done" || !job.id) return;
+    try {
+      window.localStorage.setItem(JOB_ID_KEY, job.id);
+    } catch {
+      /* ignore */
+    }
+    void refreshHistory();
+  }, [job?.id, job?.status]);
+
+  useEffect(() => {
     if (!asrJob?.id || asrJob.status === "done" || asrJob.status === "error") return;
     const timer = window.setInterval(async () => {
       try {
@@ -238,17 +268,31 @@ export default function App() {
   }, [asrJob?.id, asrJob?.status]);
 
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("asr");
-    if (!id) return;
-    void (async () => {
-      try {
-        const next = await getTranscribeJob(id);
-        setAsrJob(next);
-        if (next.text) setAsrText(next.text);
-      } catch {
-        setMessage("找不到转写任务");
-      }
-    })();
+    const asrId = new URLSearchParams(window.location.search).get("asr");
+    const jobId = new URLSearchParams(window.location.search).get("job");
+    if (asrId) {
+      void (async () => {
+        try {
+          const next = await getTranscribeJob(asrId);
+          setAsrJob(next);
+          if (next.text) setAsrText(next.text);
+        } catch {
+          setMessage("找不到转写任务");
+        }
+      })();
+    }
+    const storedJob = stored(JOB_ID_KEY, "");
+    const pick = jobId || storedJob;
+    if (pick) {
+      void (async () => {
+        try {
+          const next = await getJob(pick);
+          setJob(next);
+        } catch {
+          /* stale id after files were deleted */
+        }
+      })();
+    }
   }, []);
 
   function addSegment() {
@@ -396,6 +440,12 @@ export default function App() {
         language,
       });
       setJob(next);
+      try {
+        window.localStorage.setItem(JOB_ID_KEY, next.id);
+      } catch {
+        /* ignore */
+      }
+      void refreshHistory();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "提交失败");
     } finally {
@@ -467,6 +517,37 @@ export default function App() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "下载失败");
     }
+  }
+
+  async function openHistory(id: string) {
+    try {
+      const next = await getJob(id);
+      setJob(next);
+      try {
+        window.localStorage.setItem(JOB_ID_KEY, id);
+      } catch {
+        /* ignore */
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "找不到成片");
+    }
+  }
+
+  async function onDeleteHistory(id: string) {
+    try {
+      await deleteJob(id);
+      if (job?.id === id) setJob(null);
+      await refreshHistory();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除失败");
+    }
+  }
+
+  function formatWhen(value?: string) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
   const audioUrl = job?.status === "done" ? job.download_url || apiUrl(`/api/jobs/${job.id}/audio`) : "";
@@ -837,8 +918,46 @@ export default function App() {
       <section className="panel playback">
         <div>
           <h2>3. 分段成片</h2>
-          <p className="hint">编号对应单段 WAV，完整轨是按编号顺序拼起来的结果。</p>
+          <p className="hint">
+            {API_BASE
+              ? "成片保存在 Mac 的 data/output/。24-bit 大文件建议在本机打开 http://127.0.0.1:8000 从历史记录下载，不走隧道。"
+              : "历史成片在本机 data/output/，刷新或重启后仍可试听（16-bit）和下载（24-bit）。"}
+          </p>
         </div>
+        {history.length ? (
+          <div className="history-list">
+            {history.map((item) => (
+              <div key={item.id} className={job?.id === item.id ? "history-card on" : "history-card"}>
+                <button type="button" className="history-select" onClick={() => void openHistory(item.id)}>
+                  <strong>{item.title || item.id}</strong>
+                  <small>
+                    {formatWhen(item.created_at)}
+                    {item.mode ? ` · ${MODE_LABEL[item.mode] || item.mode}` : ""}
+                    {item.audio_sec ? ` · ${item.audio_sec}s` : ""}
+                    {item.segments?.length ? ` · ${item.segments.length} 段` : item.chunks ? ` · ${item.chunks} 段` : ""}
+                    {item.status !== "done" ? ` · ${item.status}` : ""}
+                  </small>
+                </button>
+                {item.status === "done" ? (
+                  <div className="history-actions">
+                    <button
+                      type="button"
+                      className="ghost mini"
+                      onClick={() => void onDownload(withDownload(apiUrl(`/api/jobs/${item.id}/audio`)), `${item.id}.wav`)}
+                    >
+                      下载
+                    </button>
+                    <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
+                      删除
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="hint">还没有成片。生成一次后会留在历史记录里。</p>
+        )}
         {job ? (
           <div className="job">
             <div className="bar">
@@ -851,6 +970,9 @@ export default function App() {
                   ? job.error
                   : `${job.status} · ${Math.round((job.progress || 0) * 100)}%`}
             </p>
+            {job.status === "done" && job.local_dir && !API_BASE ? (
+              <p className="hint">本机目录 {job.local_dir}</p>
+            ) : null}
             {audioUrl ? (
               <div className="player">
                 <audio controls src={audioUrl} />
@@ -890,7 +1012,7 @@ export default function App() {
               </ol>
             ) : null}
           </div>
-        ) : (
+        ) : history.length ? null : (
           <p className="hint">生成结果会按编号显示在这里。</p>
         )}
         {message ? <p className="flash">{message}</p> : null}
