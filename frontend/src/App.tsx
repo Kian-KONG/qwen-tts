@@ -8,6 +8,7 @@ import {
   deleteJob,
   deleteVoice,
   downloadFile,
+  fetchSpeakerPreview,
   getHealth,
   getJob,
   getTranscribeJob,
@@ -32,6 +33,20 @@ import { useHashRoute } from "./route";
 const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
 2. We shipped faster voice cloning for internal videos, running entirely on a Mac mini.
 3. The narration should sound natural, steady, and easy to cut against picture.`;
+
+const CLONE_PROMPT = "已为您开锁，欢迎回家。门已关闭并反锁，一切正常。";
+const REC_MAX_SEC = 10;
+
+function recorderFormat(): { mime: string; ext: string } {
+  const options = [
+    { mime: "audio/webm;codecs=opus", ext: "webm" },
+    { mime: "audio/webm", ext: "webm" },
+    { mime: "audio/mp4", ext: "m4a" },
+    { mime: "audio/ogg;codecs=opus", ext: "ogg" },
+  ];
+  if (typeof MediaRecorder === "undefined") return { mime: "", ext: "webm" };
+  return options.find((item) => MediaRecorder.isTypeSupported(item.mime)) || { mime: "", ext: "webm" };
+}
 
 const ITEM_MARK = /^\s*(?:\d{1,3}[\.\)、:：]|\(\d{1,3}\)|\（\d{1,3}\）)\s*/;
 
@@ -173,6 +188,13 @@ function groupSegments(segments: JobSegment[]): { text: string; clips: JobSegmen
   return groups;
 }
 
+function jobVoiceCount(job: Job): number {
+  const fromTracks = job.tracks?.length || 0;
+  const fromSpeakers = job.speakers?.length || 0;
+  const fromClips = new Set((job.segments || []).map((item) => item.voice).filter(Boolean)).size;
+  return Math.max(fromTracks, fromSpeakers, fromClips);
+}
+
 function storedJson<T>(key: string, fallback: T): T {
   try {
     const raw = window.localStorage.getItem(key);
@@ -232,15 +254,40 @@ export default function App() {
     const one = stored(VOICE_ID_KEY, "");
     return one ? [one] : [];
   });
-  const [voiceName, setVoiceName] = useState("Studio A");
+  const [voiceName, setVoiceName] = useState("我的音色");
   const [designs, setDesigns] = useState<DesignPick[]>(() => {
     const raw = storedJson<DesignPick[]>(DESIGNS_KEY, []);
     return Array.isArray(raw) ? raw.filter((item) => item?.instruct && item?.name) : [];
   });
   const [instruct, setInstruct] = useState(VOICE_PRESETS[0].text);
   const [styleInstruct, setStyleInstruct] = useState("");
+  const [stableDub, setStableDub] = useState(true);
   const [refFile, setRefFile] = useState<File | null>(null);
-  const [refText, setRefText] = useState("");
+  const [refText, setRefText] = useState(CLONE_PROMPT);
+  const [recStatus, setRecStatus] = useState<"idle" | "recording" | "ready">("idle");
+  const [recSeconds, setRecSeconds] = useState(0);
+  const [recUrl, setRecUrl] = useState("");
+  const recHandle = useRef<{
+    recorder: MediaRecorder | null;
+    stream: MediaStream | null;
+    chunks: Blob[];
+    timer: number | null;
+    startedAt: number;
+    url: string;
+    mime: string;
+    ext: string;
+    ignoreStop: boolean;
+  }>({
+    recorder: null,
+    stream: null,
+    chunks: [],
+    timer: null,
+    startedAt: 0,
+    url: "",
+    mime: "",
+    ext: "webm",
+    ignoreStop: false,
+  });
   const [asrFile, setAsrFile] = useState<File | null>(null);
   const [asrLanguage, setAsrLanguage] = useState("Auto");
   const [asrJob, setAsrJob] = useState<Transcript | null>(null);
@@ -248,6 +295,7 @@ export default function App() {
   const [asrCopied, setAsrCopied] = useState(false);
   const [excelName, setExcelName] = useState("");
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const [previewingSpeaker, setPreviewingSpeaker] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
@@ -258,6 +306,7 @@ export default function App() {
   const [message, setMessage] = useState("");
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const voicePlayerRef = useRef<HTMLAudioElement | null>(null);
+  const speakerPreviewUrls = useRef<Record<string, string>>({});
 
   const filledSegments = useMemo(() => parseMarkdownList(markdown), [markdown]);
   const pendingClone = Boolean(!selectedVoiceIds.length && refFile && refText.trim());
@@ -331,6 +380,16 @@ export default function App() {
     void refresh();
     const timer = window.setInterval(() => void refresh(), 15000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const handle = recHandle.current;
+      if (handle.timer != null) window.clearInterval(handle.timer);
+      if (handle.recorder && handle.recorder.state !== "inactive") handle.recorder.stop();
+      handle.stream?.getTracks().forEach((track) => track.stop());
+      if (handle.url) URL.revokeObjectURL(handle.url);
+    };
   }, []);
 
   useEffect(() => {
@@ -460,10 +519,120 @@ export default function App() {
     }, 0);
   }
 
+  function stopMicTracks() {
+    recHandle.current.stream?.getTracks().forEach((track) => track.stop());
+    recHandle.current.stream = null;
+  }
+
+  function stopMicTimer() {
+    if (recHandle.current.timer != null) {
+      window.clearInterval(recHandle.current.timer);
+      recHandle.current.timer = null;
+    }
+  }
+
+  function clearMicTake() {
+    recHandle.current.ignoreStop = true;
+    stopMicTimer();
+    if (recHandle.current.recorder && recHandle.current.recorder.state !== "inactive") {
+      recHandle.current.recorder.stop();
+    }
+    recHandle.current.recorder = null;
+    stopMicTracks();
+    if (recHandle.current.url) {
+      URL.revokeObjectURL(recHandle.current.url);
+      recHandle.current.url = "";
+    }
+    setRecUrl("");
+    setRecStatus("idle");
+    setRecSeconds(0);
+  }
+
+  function finishMic(blob: Blob) {
+    stopMicTracks();
+    stopMicTimer();
+    const mime = recHandle.current.mime || blob.type || "audio/webm";
+    const ext = recHandle.current.ext || "webm";
+    const file = new File([blob], `mic-ref.${ext}`, { type: mime });
+    if (recHandle.current.url) URL.revokeObjectURL(recHandle.current.url);
+    const url = URL.createObjectURL(blob);
+    recHandle.current.url = url;
+    setRecUrl(url);
+    setRefFile(file);
+    setRecStatus("ready");
+  }
+
+  function stopMic() {
+    const recorder = recHandle.current.recorder;
+    if (!recorder || recorder.state === "inactive") return;
+    recorder.stop();
+    recHandle.current.recorder = null;
+  }
+
+  async function startMic() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setMessage("当前浏览器不支持麦克风录音，请改用上传文件");
+      return;
+    }
+    if (!refText.trim()) setRefText(CLONE_PROMPT);
+    setMessage("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+      const format = recorderFormat();
+      const recorder = format.mime
+        ? new MediaRecorder(stream, { mimeType: format.mime })
+        : new MediaRecorder(stream);
+      recHandle.current.ignoreStop = false;
+      recHandle.current.recorder = recorder;
+      recHandle.current.stream = stream;
+      recHandle.current.chunks = [];
+      recHandle.current.mime = recorder.mimeType || format.mime || "audio/webm";
+      recHandle.current.ext = format.ext;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) recHandle.current.chunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        if (recHandle.current.ignoreStop) {
+          recHandle.current.chunks = [];
+          stopMicTracks();
+          stopMicTimer();
+          return;
+        }
+        const blob = new Blob(recHandle.current.chunks, { type: recHandle.current.mime });
+        recHandle.current.chunks = [];
+        if (blob.size > 0) finishMic(blob);
+        else {
+          stopMicTracks();
+          stopMicTimer();
+          setRecStatus("idle");
+          setMessage("没录到声音，请再试一次");
+        }
+      };
+      recorder.start(200);
+      recHandle.current.startedAt = Date.now();
+      setRecSeconds(0);
+      setRecStatus("recording");
+      recHandle.current.timer = window.setInterval(() => {
+        const sec = (Date.now() - recHandle.current.startedAt) / 1000;
+        setRecSeconds(sec);
+        if (sec >= REC_MAX_SEC) stopMic();
+      }, 100);
+    } catch (error) {
+      const denied = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "NotFoundError");
+      setMessage(denied ? "请允许使用麦克风后再录，或检查有没有接好话筒" : "无法打开麦克风");
+    }
+  }
+
   async function onSaveVoice(event: FormEvent) {
     event.preventDefault();
     if (!refFile) {
-      setMessage("请先上传 3–10 秒参考音频");
+      setMessage("请先对着麦克风录音，或上传 3–10 秒参考音频");
+      return;
+    }
+    if (!refText.trim()) {
+      setMessage("请填写朗读稿，需和录音内容一致");
       return;
     }
     setBusy(true);
@@ -556,6 +725,7 @@ export default function App() {
         speakers: selectedSpeakers,
         designs,
         styleInstruct: styleInstruct || undefined,
+        stable: stableDub,
         voiceIds: selectedVoiceIds.length ? selectedVoiceIds : undefined,
         refAudio: pendingClone ? refFile || undefined : undefined,
         refText: pendingClone ? refText : undefined,
@@ -620,6 +790,33 @@ export default function App() {
     }
   }
 
+  async function togglePlaySpeaker(id: string) {
+    const player = voicePlayerRef.current;
+    if (!player) return;
+    const key = `preset:${id}`;
+    if (playingVoiceId === key && !player.paused) {
+      player.pause();
+      setPlayingVoiceId(null);
+      return;
+    }
+    setMessage("");
+    const needsFetch = !speakerPreviewUrls.current[id];
+    if (needsFetch) setPreviewingSpeaker(id);
+    try {
+      if (needsFetch) {
+        speakerPreviewUrls.current[id] = await fetchSpeakerPreview(id);
+      }
+      player.src = speakerPreviewUrls.current[id];
+      await player.play();
+      setPlayingVoiceId(key);
+    } catch (error) {
+      setPlayingVoiceId(null);
+      setMessage(error instanceof Error ? error.message : "无法试听预设音色");
+    } finally {
+      if (needsFetch) setPreviewingSpeaker(null);
+    }
+  }
+
   function startRenameVoice(voice: Voice) {
     setVoiceId(voice.id);
     setRenamingId(voice.id);
@@ -666,6 +863,24 @@ export default function App() {
     }
   }
 
+  function onDownloadHistory(item: Job) {
+    const clips = item.segments?.length || 0;
+    if (clips > 1 || jobVoiceCount(item) > 1) {
+      const zip = item.zip_url || apiUrl(`/api/jobs/${item.id}/zip`);
+      void onDownload(zip, `${item.id}.zip`);
+      return;
+    }
+    const segment = item.segments?.[0];
+    if (segment?.url) {
+      void onDownload(withDownload(segment.url), wavName(segment.filename || item.title || item.id));
+      return;
+    }
+    void onDownload(
+      withDownload(item.download_url || apiUrl(`/api/jobs/${item.id}/audio`)),
+      `${item.id}.wav`,
+    );
+  }
+
   async function openHistory(id: string) {
     try {
       const next = await getJob(id);
@@ -697,7 +912,6 @@ export default function App() {
     return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
-  const audioUrl = job?.status === "done" ? job.download_url || apiUrl(`/api/jobs/${job.id}/audio`) : "";
   const zipUrl = job?.status === "done" ? job.zip_url || "" : "";
 
   return (
@@ -830,6 +1044,11 @@ export default function App() {
       <main className="grid">
         <section className="panel">
           <h2>1. 音色</h2>
+          <audio
+            ref={voicePlayerRef}
+            className="voice-player"
+            onEnded={() => setPlayingVoiceId(null)}
+          />
           <p className="hint">
             预设、描述和克隆可以同时选。同一文稿会为每个已选音色各生成一段短音频，文件名是「文本 - 声色.wav」。
           </p>
@@ -868,24 +1087,37 @@ export default function App() {
           <div className="voice-block">
             <h3>预设说话人</h3>
             <p className="hint">
-              可多选。男女声请同时点选，例如 Ryan + Vivian。
+              可多选。点「试听」听一句该说话人的样例，第一次会现场生成并缓存。
               {health?.custom_model_ready ? "" : " 当前还没下载 CustomVoice 权重，请先运行 `make download-custom`。"}
             </p>
             <div className="speaker-grid">
               {speakers.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={selectedSpeakers.includes(item.id) ? "speaker on" : "speaker"}
-                  aria-pressed={selectedSpeakers.includes(item.id)}
-                  onClick={() => toggleSpeaker(item.id)}
-                >
-                  {item.label}
-                  <small>
-                    {item.native}
-                    {item.description ? ` · ${item.description}` : ""}
-                  </small>
-                </button>
+                <div key={item.id} className={selectedSpeakers.includes(item.id) ? "speaker-card on" : "speaker-card"}>
+                  <button
+                    type="button"
+                    className={selectedSpeakers.includes(item.id) ? "speaker on" : "speaker"}
+                    aria-pressed={selectedSpeakers.includes(item.id)}
+                    onClick={() => toggleSpeaker(item.id)}
+                  >
+                    {item.label}
+                    <small>
+                      {item.native}
+                      {item.description ? ` · ${item.description}` : ""}
+                    </small>
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost mini"
+                    disabled={health?.custom_model_ready === false || previewingSpeaker !== null}
+                    onClick={() => void togglePlaySpeaker(item.id)}
+                  >
+                    {previewingSpeaker === item.id
+                      ? "生成中…"
+                      : playingVoiceId === `preset:${item.id}`
+                        ? "暂停"
+                        : "试听"}
+                  </button>
+                </div>
               ))}
             </div>
             <label>
@@ -893,7 +1125,7 @@ export default function App() {
               <input
                 value={styleInstruct}
                 onChange={(e) => setStyleInstruct(e.target.value)}
-                placeholder="Very happy and excited."
+                placeholder="语速平稳，语气中性，不拖腔，句末利落，不要额外停顿。"
               />
             </label>
           </div>
@@ -933,15 +1165,10 @@ export default function App() {
           <div className="voice-block">
             <h3>声音克隆{voices.length ? `（${voices.length}）` : ""}</h3>
             <p className="hint">
-              可多选。上传过的音色保存在本机 `data/voices/`。新音色录 3–10 秒干净人声，并写上逐字稿。
+              对着麦克风朗读下面这句，3–10 秒干净人声。保存后会留在本机 `data/voices/`，也可继续上传文件。
             </p>
             {voices.length ? (
               <div className="stack">
-                <audio
-                  ref={voicePlayerRef}
-                  className="voice-player"
-                  onEnded={() => setPlayingVoiceId(null)}
-                />
                 <div className="voice-list">
                   {voices.map((voice) => (
                     <div key={voice.id} className={selectedVoiceIds.includes(voice.id) ? "voice-card on" : "voice-card"}>
@@ -988,22 +1215,63 @@ export default function App() {
                 音色名称
                 <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
               </label>
+              <div className="rec-script">
+                <span>请朗读</span>
+                {CLONE_PROMPT}
+              </div>
+              <div className="rec-bar">
+                {recStatus === "recording" ? (
+                  <button type="button" className="rec-stop" onClick={stopMic}>
+                    停止
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => void startMic()} disabled={busy}>
+                    开始录音
+                  </button>
+                )}
+                <span className={recStatus === "recording" ? "rec-live" : "hint"}>
+                  {recStatus === "recording"
+                    ? `录音中 ${recSeconds.toFixed(1)}s / ${REC_MAX_SEC}s`
+                    : recStatus === "ready"
+                      ? `已录 ${recSeconds.toFixed(1)}s`
+                      : "建议 5–8 秒，最长 10 秒"}
+                </span>
+                {recStatus === "ready" ? (
+                  <button
+                    type="button"
+                    className="ghost mini"
+                    onClick={() => {
+                      clearMicTake();
+                      setRefFile(null);
+                    }}
+                  >
+                    重录
+                  </button>
+                ) : null}
+              </div>
+              {recUrl ? <audio className="rec-player" controls src={recUrl} /> : null}
               <FileField
-                label="参考音频"
+                label="或上传参考音频"
                 accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
                 file={refFile}
-                emptyText="wav / m4a / mp3，3–10 秒"
-                onChange={setRefFile}
+                emptyText="wav / m4a / mp3 / 麦克风录音，3–10 秒"
+                onChange={(file) => {
+                  if (file) clearMicTake();
+                  setRefFile(file);
+                }}
               />
               <label>
-                参考音频文字稿
+                朗读稿（需和录音一致）
                 <textarea
-                  rows={4}
+                  rows={3}
                   value={refText}
                   onChange={(e) => setRefText(e.target.value)}
-                  placeholder="Exactly what the reference clip says."
+                  placeholder={CLONE_PROMPT}
                 />
               </label>
+              <button type="button" className="ghost mini" onClick={() => setRefText(CLONE_PROMPT)}>
+                填入门锁模板
+              </button>
               <div className="row">
                 <button type="submit" disabled={busy}>
                   保存到音色库
@@ -1055,6 +1323,15 @@ export default function App() {
                 </div>
               </label>
             </div>
+            <label className="check">
+              <input type="checkbox" checked={stableDub} onChange={(e) => setStableDub(e.target.checked)} />
+              稳定配音
+            </label>
+            <p className="hint">
+              {stableDub
+                ? "低温采样、短句统一句号、剪掉头尾静音，相近字数会轻微拉齐时长。关闭则恢复模型自由发挥。"
+                : "已关闭稳定配音，短句语气和时长会更随性。"}
+            </p>
             <p className="hint">
               用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段短音频，不会连读成一条。下载文件名是「文本 - 声色.wav」。也可以导入 Excel / CSV，每个非空单元格就是一段。
             </p>
@@ -1116,8 +1393,8 @@ export default function App() {
           <h2>3. 分段成片</h2>
           <p className="hint">
             {API_BASE
-              ? "成片保存在 Mac 的 data/output/。24-bit 大文件建议在本机打开 http://127.0.0.1:8000 从历史记录下载，不走隧道。"
-              : "历史成片在本机 data/output/，刷新或重启后仍可试听（16-bit）和下载（24-bit）。"}
+              ? "成片保存在 Mac 的 data/output/。打包 zip 只有分段短音频，没有合成完整轨。24-bit 大文件建议在本机打开 http://127.0.0.1:8000 下载。"
+              : "打包 zip 只有分段短音频「文本 - 声色.wav」，不会合成一条。如果要一整段，文稿不要编成 1. 2. 3.。试听是 16-bit，下载是 24-bit。"}
           </p>
         </div>
         {history.length ? (
@@ -1146,9 +1423,9 @@ export default function App() {
                     <button
                       type="button"
                       className="ghost mini"
-                      onClick={() => void onDownload(withDownload(apiUrl(`/api/jobs/${item.id}/audio`)), `${item.id}.wav`)}
+                      onClick={() => void onDownloadHistory(item)}
                     >
-                      下载
+                      {(item.segments?.length || 0) > 1 || jobVoiceCount(item) > 1 ? "打包分段" : "下载"}
                     </button>
                     <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
                       删除
@@ -1178,30 +1455,11 @@ export default function App() {
             {job.status === "done" && job.local_dir && !API_BASE ? (
               <p className="hint">本机目录 {job.local_dir} · 文件名「文本 - 声色.wav」</p>
             ) : null}
-            {job.status === "done" && (job.tracks?.length || audioUrl) ? (
+            {job.status === "done" && zipUrl && (job.segments?.length || 0) > 1 ? (
               <div className="tracks">
-                {(job.tracks?.length
-                  ? job.tracks
-                  : audioUrl
-                    ? [{ index: 1, url: audioUrl, filename: `${job.id}.wav`, voice: job.speaker }]
-                    : []
-                ).map((track) => {
-                  const name = track.filename || `完整轨${track.voice ? ` - ${track.voice}` : ""}.wav`;
-                  return (
-                    <div key={track.index} className="player">
-                      <span>{name.replace(/\.wav$/i, "")}</span>
-                      <audio controls src={track.url} />
-                      <button type="button" onClick={() => void onDownload(withDownload(track.url), wavName(name))}>
-                        下载
-                      </button>
-                    </div>
-                  );
-                })}
-                {zipUrl ? (
-                  <button type="button" className="ghost" onClick={() => void onDownload(zipUrl, `${job.id}.zip`)}>
-                    打包全部分段
-                  </button>
-                ) : null}
+                <button type="button" className="ghost" onClick={() => void onDownload(zipUrl, `${job.id}.zip`)}>
+                  打包全部分段
+                </button>
               </div>
             ) : null}
             {job.status === "done" && job.segments?.length ? (

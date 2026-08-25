@@ -27,6 +27,7 @@ class Job:
     instruct: str = ""
     speaker: str = ""
     voices: list[dict] = field(default_factory=list)
+    stable: bool = True
 
 
 class JobRunner:
@@ -81,6 +82,7 @@ class JobRunner:
                     instruct=job.instruct,
                     speaker=job.speaker,
                     voices=job.voices or None,
+                    stable=job.stable,
                     progress_cb=on_progress,
                 )
                 job.progress = 1.0

@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from .config import OUTPUT_SAMPLE_RATE
+from .config import ATEMPO_MAX, ATEMPO_MIN, OUTPUT_SAMPLE_RATE, SILENCE_PAD_MS
 
 _UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\n\r\t]+')
 
@@ -54,6 +54,153 @@ def to_float32(audio) -> np.ndarray:
     if peak > 1.2:
         array = array / 32768.0
     return np.clip(array, -1.0, 1.0)
+
+
+_PUNCT = re.compile(r"[。！？.!?…，,、；;：:\s\"'「」『』（）()\[\]【】]+")
+_SHORT_END = re.compile(r"[？！!?]$")
+_CJK = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
+
+def spoken_len(text: str) -> int:
+    return len(_PUNCT.sub("", text or ""))
+
+
+def char_bucket(text: str) -> int:
+    n = spoken_len(text)
+    if n <= 0:
+        return 0
+    if n <= 3:
+        return 3
+    if n <= 6:
+        return 6
+    if n <= 10:
+        return 10
+    return 0
+
+
+def normalize_tts_text(text: str) -> str:
+    value = re.sub(r"\s+", " ", (text or "").strip())
+    if not value:
+        return value
+    value = re.sub(r"[。.]{2,}", "。", value)
+    value = re.sub(r"…+", "。", value)
+    cjk = len(_CJK.findall(value))
+    count = spoken_len(value)
+    if cjk and count <= 8 and cjk >= max(1, count // 2) and not _SHORT_END.search(value):
+        value = re.sub(r"[。.!?！？\s]+$", "", value)
+        if value:
+            value = f"{value}。"
+    return value
+
+
+def trim_silence(
+    audio: np.ndarray,
+    sample_rate: int,
+    pad_ms: int = SILENCE_PAD_MS,
+    thresh: float = 0.012,
+) -> np.ndarray:
+    array = to_float32(audio)
+    if array.size == 0 or sample_rate <= 0:
+        return array
+    mask = np.abs(array) > thresh
+    if not mask.any():
+        return array
+    start = int(np.argmax(mask))
+    end = int(len(mask) - np.argmax(mask[::-1]))
+    pad = int(sample_rate * max(0, pad_ms) / 1000.0)
+    start = max(0, start - pad)
+    end = min(len(array), end + pad)
+    if end - start < int(sample_rate * 0.08):
+        return array
+    return array[start:end]
+
+
+def time_stretch(audio: np.ndarray, sample_rate: int, tempo: float) -> np.ndarray:
+    array = to_float32(audio)
+    tempo = float(tempo)
+    if array.size == 0 or abs(tempo - 1.0) < 0.01:
+        return array
+    if tempo < ATEMPO_MIN or tempo > ATEMPO_MAX:
+        return array
+    ffmpeg = ffmpeg_bin()
+    if ffmpeg is None:
+        return array
+    src = dst = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            src = Path(tmp.name)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            dst = Path(tmp.name)
+        sf.write(src, array, sample_rate, subtype="PCM_16")
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(src),
+                "-filter:a",
+                f"atempo={tempo:.4f}",
+                "-c:a",
+                "pcm_s16le",
+                str(dst),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        stretched, rate = sf.read(str(dst), dtype="float32")
+        if int(rate) != int(sample_rate) and stretched.size:
+            # keep native rate; resample_for_video happens later
+            pass
+        return to_float32(stretched)
+    except Exception:
+        return array
+    finally:
+        if src:
+            src.unlink(missing_ok=True)
+        if dst:
+            dst.unlink(missing_ok=True)
+
+
+def align_clip_lengths(
+    wavs: list[np.ndarray],
+    texts: list[str],
+    sample_rate: int,
+) -> list[np.ndarray]:
+    from collections import defaultdict
+
+    if sample_rate <= 0 or len(wavs) != len(texts):
+        return wavs
+    groups: dict[int, list[int]] = defaultdict(list)
+    for index, text in enumerate(texts):
+        bucket = char_bucket(text)
+        if bucket:
+            groups[bucket].append(index)
+    aligned = list(wavs)
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+        durations = [aligned[i].size / float(sample_rate) for i in indexes]
+        target = float(np.median(np.array(durations, dtype=np.float64)))
+        if target <= 0:
+            continue
+        for index in indexes:
+            current = aligned[index].size / float(sample_rate)
+            if current <= 0:
+                continue
+            tempo = current / target
+            if ATEMPO_MIN <= tempo <= ATEMPO_MAX:
+                aligned[index] = time_stretch(aligned[index], sample_rate, tempo)
+    return aligned
+
+
+def stabilize_clips(
+    wavs: list[np.ndarray],
+    texts: list[str],
+    sample_rate: int,
+    pad_ms: int = SILENCE_PAD_MS,
+) -> list[np.ndarray]:
+    trimmed = [trim_silence(item, sample_rate, pad_ms=pad_ms) for item in wavs]
+    return align_clip_lengths(trimmed, texts, sample_rate)
 
 
 def concat_with_gap(chunks: list[np.ndarray], sample_rate: int, gap_ms: int) -> np.ndarray:

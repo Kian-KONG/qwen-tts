@@ -69,6 +69,17 @@ def _wav_response(path: Path, filename: str, download: bool) -> FileResponse:
     )
 
 
+def _skip_zip_name(name: str) -> bool:
+    stem = name.lower()
+    return (
+        name.startswith(".")
+        or ".browser." in name
+        or name == "full.wav"
+        or name.startswith("完整轨")
+        or stem.startswith("full.")
+    )
+
+
 def _job_full_wav(job_id: str) -> Path:
     try:
         job = runner.get(job_id)
@@ -332,6 +343,12 @@ def _normalize_language(language: str | None) -> str:
     return value
 
 
+def _form_flag(value: Optional[str], default: bool = True) -> bool:
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+
 class JobRequest(BaseModel):
     text: str
     voice_id: Optional[str] = None
@@ -346,6 +363,7 @@ class JobRequest(BaseModel):
     voice_ids: Optional[str] = None
     designs: Optional[str] = None
     style_instruct: Optional[str] = None
+    stable: bool = True
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -419,6 +437,24 @@ def api_voices():
 @app.get("/api/speakers")
 def api_speakers():
     return {"data": SPEAKERS, "default": DEFAULT_SPEAKER}
+
+
+@app.get("/api/speakers/{speaker_id}/preview")
+def api_speaker_preview(speaker_id: str):
+    try:
+        path = engine.preview_speaker(speaker_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Speaker not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return FileResponse(
+        audio_util.browser_wav(path),
+        media_type="audio/wav",
+        filename=f"{speaker_id}.wav",
+        content_disposition_type="inline",
+    )
 
 
 @app.get("/api/languages")
@@ -566,6 +602,7 @@ async def api_create_job(
     voice_ids: Optional[str] = Form(None),
     designs: Optional[str] = Form(None),
     style_instruct: Optional[str] = Form(None),
+    stable: Optional[str] = Form("true"),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
@@ -609,6 +646,7 @@ async def api_create_job(
             instruct=description,
             speaker=speaker_id,
             voices=job_voices,
+            stable=_form_flag(stable, True),
         )
         return public_job(job)
     except KeyError:
@@ -650,6 +688,7 @@ def api_create_job_json(payload: JobRequest):
         instruct=description,
         speaker=speaker_id,
         voices=job_voices,
+        stable=payload.stable,
     )
     return public_job(job)
 
@@ -714,29 +753,25 @@ def api_job_track_audio(job_id: str, index: int, download: bool = False):
 
 @app.get("/api/jobs/{job_id}/zip")
 def api_job_zip(job_id: str):
-    full = _job_full_wav(job_id)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         added: set[str] = set()
         for item in _job_item_list(job_id, "segments"):
             path = Path(item.get("path") or "")
             name = str(item.get("filename") or path.name)
-            if path.exists() and name not in added:
+            if path.exists() and name not in added and not _skip_zip_name(name):
                 archive.write(path, name)
                 added.add(name)
-        for item in _job_item_list(job_id, "tracks"):
-            path = Path(item.get("path") or "")
-            name = str(item.get("filename") or path.name)
-            if path.exists() and name not in added:
-                archive.write(path, name)
-                added.add(name)
-        if full.exists() and full.name not in added and not _job_item_list(job_id, "tracks"):
-            archive.write(full, full.name)
         if not added:
-            for path in sorted(full.parent.glob("*.wav")):
-                if ".browser." in path.name or path.name.startswith("."):
-                    continue
-                archive.write(path, path.name)
+            folder = OUTPUT_DIR / job_id
+            if folder.is_dir():
+                for path in sorted(folder.glob("*.wav")):
+                    if _skip_zip_name(path.name):
+                        continue
+                    archive.write(path, path.name)
+                    added.add(path.name)
+        if not added:
+            raise HTTPException(status_code=404, detail="No clip files to pack")
     body = buffer.getvalue()
     return Response(
         body,

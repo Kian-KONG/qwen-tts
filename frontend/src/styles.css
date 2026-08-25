@@ -191,14 +191,26 @@ label {
   gap: 8px;
 }
 
+.speaker-card {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: #141310;
+}
+
+.speaker-card.on {
+  border-color: var(--accent);
+}
+
 button.speaker {
   display: grid;
   gap: 2px;
-  padding: 10px 12px;
+  padding: 6px 4px;
   text-align: left;
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--line);
+  border: 0;
   font-weight: 600;
 }
 
@@ -209,7 +221,6 @@ button.speaker small {
 }
 
 button.speaker.on {
-  border-color: var(--accent);
   color: var(--accent);
 }
 
@@ -314,6 +325,19 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: end;
+}
+
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+label.check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .stepper {
@@ -452,6 +476,46 @@ button.mini {
 
 .voice-rename input {
   flex: 1;
+}
+
+.rec-script {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  background: #1a1610;
+  border: 1px solid var(--line);
+  font-size: 16px;
+  line-height: 1.65;
+  font-weight: 600;
+}
+
+.rec-script span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.rec-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.rec-live {
+  color: #e07050;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+button.rec-stop {
+  background: #c44b32;
+  color: #fff7f2;
+}
+
+.rec-player {
+  width: 100%;
 }
 
 .history-list {

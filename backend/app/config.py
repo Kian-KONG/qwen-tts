@@ -32,6 +32,7 @@ ASR_MODEL_ID = os.getenv(
 ASR_MODEL_DIR = Path(os.getenv("QWEN_ASR_MODEL", ROOT / "models" / "qwen3-asr")).resolve()
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
+PREVIEW_DIR = Path(os.getenv("QWEN_TTS_PREVIEWS", ROOT / "data" / "previews" / "speakers")).resolve()
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 
 HOST = os.getenv("QWEN_TTS_HOST", "0.0.0.0")
@@ -42,6 +43,17 @@ OUTPUT_SAMPLE_RATE = int(os.getenv("QWEN_TTS_OUTPUT_SR", "44100"))
 GAP_MS = int(os.getenv("QWEN_TTS_GAP_MS", "400"))
 MAX_CHUNK_CHARS = int(os.getenv("QWEN_TTS_MAX_CHUNK_CHARS", "0"))
 API_KEY = os.getenv("QWEN_TTS_API_KEY", "")
+TTS_TEMPERATURE = float(os.getenv("QWEN_TTS_TEMPERATURE", "0.3"))
+TTS_SEED = int(os.getenv("QWEN_TTS_SEED", "42"))
+TTS_TOP_P = float(os.getenv("QWEN_TTS_TOP_P", "0.9"))
+TTS_REPETITION_PENALTY = float(os.getenv("QWEN_TTS_REPETITION_PENALTY", "1.05"))
+STABLE_STYLE = os.getenv(
+    "QWEN_TTS_STABLE_STYLE",
+    "语速平稳，语气中性，不拖腔，句末利落，不要额外停顿。",
+)
+SILENCE_PAD_MS = int(os.getenv("QWEN_TTS_SILENCE_PAD_MS", "80"))
+ATEMPO_MIN = float(os.getenv("QWEN_TTS_ATEMPO_MIN", "0.88"))
+ATEMPO_MAX = float(os.getenv("QWEN_TTS_ATEMPO_MAX", "1.12"))
 
 LANGUAGES = [
     {"id": "Auto", "label": "自动检测", "lang_code": "auto", "script": "mixed"},
@@ -72,10 +84,17 @@ SPEAKERS = [
     {"id": "Sohee", "label": "Sohee", "native": "Korean", "description": "情感丰富的韩语女声"},
 ]
 SPEAKER_BY_ID = {item["id"]: item for item in SPEAKERS}
+SPEAKER_PREVIEW = {
+    "English": ("Hello, this is a preview of my voice.", "English"),
+    "Chinese": ("你好，这是我的声音试听。", "Chinese"),
+    "Japanese": ("こんにちは。これは声のサンプルです。", "Japanese"),
+    "Korean": ("안녕하세요, 제 목소리 미리듣기입니다.", "Korean"),
+}
 
 for path in (
     VOICES_DIR,
     OUTPUT_DIR,
+    PREVIEW_DIR,
     MODEL_DIR.parent,
     DESIGN_MODEL_DIR.parent,
     CUSTOM_MODEL_DIR.parent,

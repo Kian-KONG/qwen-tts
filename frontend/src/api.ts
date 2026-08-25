@@ -215,6 +215,16 @@ export function voiceAudioUrl(id: string): string {
   return apiUrl(`/api/voices/${id}/audio`);
 }
 
+export function speakerPreviewUrl(id: string): string {
+  return apiUrl(`/api/speakers/${encodeURIComponent(id)}/preview`);
+}
+
+export async function fetchSpeakerPreview(id: string): Promise<string> {
+  const res = await request(`/api/speakers/${encodeURIComponent(id)}/preview`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 export async function listSpeakers(): Promise<{ data: Speaker[]; default: string }> {
   const res = await request("/api/speakers");
   const data = await res.json();
@@ -285,12 +295,14 @@ export async function createJob(opts: {
   voiceIds?: string[];
   designs?: { id?: string; name: string; instruct: string }[];
   styleInstruct?: string;
+  stable?: boolean;
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
   body.set("batch_size", String(opts.batchSize));
   body.set("language", opts.language);
   body.set("mode", opts.mode || "preset");
+  body.set("stable", opts.stable === false ? "false" : "true");
   if (opts.instruct) body.set("instruct", opts.instruct);
   if (opts.styleInstruct) body.set("style_instruct", opts.styleInstruct);
   if (opts.speaker) body.set("speaker", opts.speaker);

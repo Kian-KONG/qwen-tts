@@ -12,6 +12,8 @@ models/**
 
 data/output/**
 !data/output/.gitkeep
+data/previews/**
+!data/previews/.gitkeep
 data/voices/*
 !data/voices/.gitkeep
 !data/voices/README.md

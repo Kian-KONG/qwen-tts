@@ -13,13 +13,19 @@ from .config import (
     CUSTOM_MODEL_DIR,
     DEFAULT_SPEAKER,
     DESIGN_MODEL_DIR,
-    GAP_MS,
     LANGUAGE,
     LANGUAGE_BY_ID,
     MODEL_DIR,
     MODEL_ID,
     OUTPUT_DIR,
+    PREVIEW_DIR,
     SPEAKER_BY_ID,
+    SPEAKER_PREVIEW,
+    STABLE_STYLE,
+    TTS_REPETITION_PENALTY,
+    TTS_SEED,
+    TTS_TEMPERATURE,
+    TTS_TOP_P,
 )
 
 
@@ -102,6 +108,25 @@ class TTSEngine:
         self.mode = mode
         self.loaded = True
 
+    def preview_speaker(self, speaker_id: str) -> Path:
+        speaker_id = speaker_id.strip()
+        meta = SPEAKER_BY_ID.get(speaker_id)
+        if not meta:
+            raise KeyError(speaker_id)
+        dest = PREVIEW_DIR / f"{speaker_id}.wav"
+        if dest.exists() and dest.stat().st_size > 0:
+            return dest
+        text, lang_code = SPEAKER_PREVIEW.get(meta.get("native") or "English", SPEAKER_PREVIEW["English"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with self.lock:
+            self._load_unlocked("preset")
+            collected = self._generate_preset_batch([text], speaker_id, lang_code, "", stable=True)
+            if 0 not in collected:
+                raise RuntimeError(f"Missing preview audio for {speaker_id}")
+            audio, rate = collected[0]
+            audio_util.write_wav(dest, audio_util.to_float32(audio), rate)
+        return dest
+
     def synthesize(
         self,
         text: str,
@@ -115,6 +140,7 @@ class TTSEngine:
         instruct: str = "",
         speaker: str = "",
         voices: list[dict] | None = None,
+        stable: bool = True,
         progress_cb=None,
     ) -> dict:
         mode = normalize_engine_mode(mode)
@@ -123,6 +149,7 @@ class TTSEngine:
         chunks = chunking.split_script(text, language)
         if not chunks:
             raise ValueError("Script is empty after splitting")
+        tts_chunks = [audio_util.normalize_tts_text(item) if stable else item for item in chunks]
         speaker_id = (speaker or DEFAULT_SPEAKER).strip()
         voice_list = [item for item in (voices or []) if item.get("id") or item.get("name") or item.get("instruct")]
         if not voice_list:
@@ -155,6 +182,8 @@ class TTSEngine:
                 item["name"] = item.get("name") or SPEAKER_BY_ID[sid]["label"]
                 if instruct.strip() and not item.get("style"):
                     item["style"] = instruct.strip()
+                if stable and not str(item.get("style") or "").strip():
+                    item["style"] = STABLE_STYLE
             else:
                 ref = item.get("ref_audio") or ref_audio
                 transcript = item.get("ref_text") or ref_text
@@ -182,25 +211,28 @@ class TTSEngine:
         segment_dir.mkdir(parents=True, exist_ok=True)
         used_names: set[str] = set()
         segments: list[dict] = []
-        tracks: list[dict] = []
         clip_index = 0
         n_voices = max(1, len(voice_list))
 
         with self.lock:
+            if stable:
+                import mlx.core as mx
+
+                mx.random.seed(TTS_SEED)
             for voice_offset, voice in enumerate(voice_list):
                 wavs: list[np.ndarray] = []
                 kind = _voice_kind(voice, mode)
                 sid = str(voice.get("id") or speaker_id)
                 self._load_unlocked(kind)
-                for offset in range(0, len(chunks), batch_size):
-                    batch = chunks[offset : offset + batch_size]
+                for offset in range(0, len(tts_chunks), batch_size):
+                    batch = tts_chunks[offset : offset + batch_size]
                     if kind == "design":
                         collected = self._generate_design_batch(
-                            batch, str(voice.get("instruct") or style), lang_code
+                            batch, str(voice.get("instruct") or style), lang_code, stable=stable
                         )
                     elif kind == "preset":
                         collected = self._generate_preset_batch(
-                            batch, sid, lang_code, str(voice.get("style") or style)
+                            batch, sid, lang_code, str(voice.get("style") or style), stable=stable
                         )
                     else:
                         collected = self._generate_batch(
@@ -208,6 +240,7 @@ class TTSEngine:
                             str(voice["ref_audio"]),
                             str(voice["ref_text"]),
                             lang_code,
+                            stable=stable,
                         )
                     for index in range(len(batch)):
                         if index not in collected:
@@ -216,8 +249,11 @@ class TTSEngine:
                         native_sr = rate
                         wavs.append(audio_util.to_float32(audio))
                     if progress_cb:
-                        local = min(1.0, (offset + len(batch)) / len(chunks))
+                        local = min(1.0, (offset + len(batch)) / len(tts_chunks))
                         progress_cb(min(1.0, (voice_offset + local) / n_voices))
+
+                if stable:
+                    wavs = audio_util.stabilize_clips(wavs, chunks, native_sr)
 
                 voice_name = str(voice.get("name") or sid)
                 for chunk, wav in zip(chunks, wavs):
@@ -241,30 +277,17 @@ class TTSEngine:
                         }
                     )
 
-                audio = audio_util.concat_with_gap(wavs, native_sr, GAP_MS)
-                track_name = audio_util.unique_wav_name(segment_dir, "完整轨", voice_name, used_names)
-                raw_path = segment_dir / f".full_{sid}.raw.wav"
-                track_path = segment_dir / track_name
-                audio_util.write_wav(raw_path, audio, native_sr)
-                audio_util.resample_for_video(raw_path, track_path)
-                raw_path.unlink(missing_ok=True)
-                tracks.append(
-                    {
-                        "index": len(tracks) + 1,
-                        "voice": voice_name,
-                        "voice_id": sid,
-                        "filename": track_name,
-                        "path": str(track_path),
-                        "duration_sec": round(float(audio.size) / float(native_sr), 2) if native_sr else 0.0,
-                    }
-                )
-
         elapsed = time.perf_counter() - started
-        out_path = Path(tracks[0]["path"]) if tracks else segment_dir / "full.wav"
+        first = Path(segments[0]["path"]) if segments else segment_dir / "full.wav"
         full_alias = segment_dir / "full.wav"
-        if out_path.exists() and full_alias.resolve() != out_path.resolve():
-            shutil.copy2(out_path, full_alias)
-        duration = max((float(item.get("duration_sec") or 0) for item in tracks), default=0.0)
+        if first.exists() and full_alias.resolve() != first.resolve():
+            shutil.copy2(first, full_alias)
+        first_id = str(voice_list[0].get("id") or "") if voice_list else ""
+        duration = sum(
+            float(item.get("duration_sec") or 0)
+            for item in segments
+            if not first_id or str(item.get("voice_id") or "") == first_id
+        )
 
         stats = {
             "chunks": len(chunks),
@@ -280,12 +303,21 @@ class TTSEngine:
             "audio_sec": round(duration, 2),
             "rtf": round(elapsed / duration, 3) if duration else None,
             "sample_rate": native_sr,
-            "output_path": str(full_alias if full_alias.exists() else out_path),
-            "tracks": tracks,
+            "output_path": str(full_alias if full_alias.exists() else first),
+            "tracks": [],
             "segments": segments,
         }
         self.last_stats = {key: value for key, value in stats.items() if key not in {"segments", "tracks"}}
         return stats
+
+    def _decode_kwargs(self, stable: bool) -> dict:
+        if not stable:
+            return {}
+        return {
+            "temperature": TTS_TEMPERATURE,
+            "top_p": TTS_TOP_P,
+            "repetition_penalty": TTS_REPETITION_PENALTY,
+        }
 
     def _generate_batch(
         self,
@@ -293,6 +325,8 @@ class TTSEngine:
         ref_audio: str,
         ref_text: str,
         language: str,
+        *,
+        stable: bool = True,
     ) -> dict[int, tuple[np.ndarray, int]]:
         kwargs = {
             "texts": batch,
@@ -301,11 +335,14 @@ class TTSEngine:
             "lang_code": language,
             "stream": False,
             "verbose": False,
+            **self._decode_kwargs(stable),
         }
         try:
             results = list(self.model.batch_generate(**kwargs))
         except TypeError:
-            return self._generate_one_by_one(batch, language, ref_audio=ref_audio, ref_text=ref_text)
+            return self._generate_one_by_one(
+                batch, language, ref_audio=ref_audio, ref_text=ref_text, stable=stable
+            )
         return _collect(results, self.sample_rate)
 
     def _generate_design_batch(
@@ -313,6 +350,8 @@ class TTSEngine:
         batch: list[str],
         instruct: str,
         language: str,
+        *,
+        stable: bool = True,
     ) -> dict[int, tuple[np.ndarray, int]]:
         kwargs = {
             "texts": batch,
@@ -320,12 +359,13 @@ class TTSEngine:
             "lang_code": language,
             "stream": False,
             "verbose": False,
+            **self._decode_kwargs(stable),
         }
         try:
             results = list(self.model.batch_generate(**kwargs))
             return _collect(results, self.sample_rate)
         except Exception:
-            return self._generate_one_by_one(batch, language, instruct=instruct)
+            return self._generate_one_by_one(batch, language, instruct=instruct, stable=stable)
 
     def _generate_preset_batch(
         self,
@@ -333,6 +373,8 @@ class TTSEngine:
         speaker: str,
         language: str,
         instruct: str,
+        *,
+        stable: bool = True,
     ) -> dict[int, tuple[np.ndarray, int]]:
         style = instruct or None
         kwargs = {
@@ -342,12 +384,15 @@ class TTSEngine:
             "lang_code": language,
             "stream": False,
             "verbose": False,
+            **self._decode_kwargs(stable),
         }
         try:
             results = list(self.model.batch_generate(**kwargs))
             return _collect(results, self.sample_rate)
         except Exception:
-            return self._generate_one_by_one(batch, language, voice=speaker, instruct=style)
+            return self._generate_one_by_one(
+                batch, language, voice=speaker, instruct=style, stable=stable
+            )
 
     def _generate_one_by_one(
         self,
@@ -358,14 +403,17 @@ class TTSEngine:
         ref_text: str | None = None,
         instruct: str | None = None,
         voice: str | None = None,
+        stable: bool = True,
     ) -> dict[int, tuple[np.ndarray, int]]:
         collected: dict[int, tuple[np.ndarray, int]] = {}
+        extra = self._decode_kwargs(stable)
         for index, text in enumerate(batch):
             kwargs: dict = {
                 "text": text,
                 "lang_code": language,
                 "stream": False,
                 "verbose": False,
+                **extra,
             }
             if instruct:
                 kwargs["instruct"] = instruct
