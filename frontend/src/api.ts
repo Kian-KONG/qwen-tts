@@ -227,6 +227,28 @@ export async function deleteVoice(id: string): Promise<void> {
   await request(`/api/voices/${id}`, { method: "DELETE" });
 }
 
+export function withDownload(url: string): string {
+  if (!url) return url;
+  return url.includes("?") ? `${url}&download=1` : `${url}?download=1`;
+}
+
+export async function downloadFile(url: string, filename: string): Promise<void> {
+  const res = await fetch(url, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await parseError(res));
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export async function createJob(opts: {
   text: string;
   voiceId?: string;

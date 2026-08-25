@@ -5,6 +5,7 @@ import {
   createTranscribeJob,
   createVoice,
   deleteVoice,
+  downloadFile,
   getHealth,
   getJob,
   getTranscribeJob,
@@ -14,6 +15,7 @@ import {
   listVoices,
   renameVoice,
   voiceAudioUrl,
+  withDownload,
   type Health,
   type Job,
   type Language,
@@ -459,6 +461,14 @@ export default function App() {
     await refresh();
   }
 
+  async function onDownload(url: string, filename: string) {
+    try {
+      await downloadFile(url, filename);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "下载失败");
+    }
+  }
+
   const audioUrl = job?.status === "done" ? job.download_url || apiUrl(`/api/jobs/${job.id}/audio`) : "";
   const zipUrl = job?.status === "done" ? job.zip_url || "" : "";
 
@@ -844,13 +854,13 @@ export default function App() {
             {audioUrl ? (
               <div className="player">
                 <audio controls src={audioUrl} />
-                <a className="button" href={audioUrl} download={`${job.id}.wav`}>
+                <button type="button" onClick={() => void onDownload(withDownload(audioUrl), `${job.id}.wav`)}>
                   完整轨
-                </a>
+                </button>
                 {zipUrl ? (
-                  <a className="button ghost" href={zipUrl} download={`${job.id}.zip`}>
+                  <button type="button" className="ghost" onClick={() => void onDownload(zipUrl, `${job.id}.zip`)}>
                     打包分段
-                  </a>
+                  </button>
                 ) : null}
               </div>
             ) : null}
@@ -863,9 +873,18 @@ export default function App() {
                       <p>{segment.text}</p>
                     </div>
                     <audio controls src={segment.url} />
-                    <a href={segment.url} download={`${job.id}_${String(segment.index).padStart(3, "0")}.wav`}>
+                    <button
+                      type="button"
+                      className="ghost mini"
+                      onClick={() =>
+                        void onDownload(
+                          withDownload(segment.url),
+                          `${job.id}_${String(segment.index).padStart(3, "0")}.wav`,
+                        )
+                      }
+                    >
                       下载
-                    </a>
+                    </button>
                   </li>
                 ))}
               </ol>

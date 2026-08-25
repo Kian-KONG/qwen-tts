@@ -57,6 +57,7 @@ def encode_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
 
 
 def resample_for_video(src: Path, dst: Path, sample_rate: int = OUTPUT_SAMPLE_RATE) -> Path:
+    """Resample to 44.1kHz 24-bit PCM for NLE download. Browser preview is converted separately."""
     ffmpeg = ffmpeg_bin()
     if ffmpeg is None:
         shutil.copy2(src, dst)
@@ -112,6 +113,24 @@ def convert_format(src: Path, fmt: str) -> tuple[bytes, str]:
         return out_path.read_bytes(), media_type
     finally:
         out_path.unlink(missing_ok=True)
+
+
+def browser_wav(path: Path) -> Path:
+    """Return a 16-bit PCM WAV path. HTML5 audio cannot play 24-bit files."""
+    path = Path(path)
+    try:
+        info = sf.info(str(path))
+    except Exception:
+        return path
+    subtype = str(getattr(info, "subtype", "") or "").upper()
+    if subtype in {"PCM_16", "PCM_S16"}:
+        return path
+    preview = path.with_name(f"{path.stem}.browser.wav")
+    if preview.exists() and preview.stat().st_mtime >= path.stat().st_mtime:
+        return preview
+    audio, rate = sf.read(str(path), dtype="float32")
+    sf.write(str(preview), audio, rate, format="WAV", subtype="PCM_16")
+    return preview
 
 
 def probe_duration(path: Path) -> float:

@@ -503,6 +503,8 @@ button.mini {
 
 audio {
   flex: 1;
+  min-width: 160px;
+  width: 100%;
 }
 
 .flash {

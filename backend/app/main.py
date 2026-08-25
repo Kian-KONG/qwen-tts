@@ -9,11 +9,11 @@ from typing import Optional
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import voices
+from . import audio_util, voices
 from .config import (
     API_KEY,
     ASR_MODEL_DIR,
@@ -27,6 +27,7 @@ from .config import (
     FRONTEND_DIST,
     LANGUAGE,
     LANGUAGES,
+    OUTPUT_DIR,
     LANGUAGE_BY_ID,
     MODEL_DIR,
     MODEL_ID,
@@ -46,6 +47,56 @@ def _check_key(authorization: Optional[str]) -> None:
     token = (authorization or "").removeprefix("Bearer ").strip()
     if token != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def _wav_response(path: Path, filename: str, download: bool) -> FileResponse:
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Audio is not ready")
+    if download:
+        return FileResponse(
+            path,
+            media_type="audio/wav",
+            filename=filename,
+            content_disposition_type="attachment",
+        )
+    return FileResponse(
+        audio_util.browser_wav(path),
+        media_type="audio/wav",
+        filename=filename,
+        content_disposition_type="inline",
+    )
+
+
+def _job_full_wav(job_id: str) -> Path:
+    try:
+        job = runner.get(job_id)
+        if job.status == "done" and job.stats.get("output_path"):
+            path = Path(job.stats["output_path"])
+            if path.exists():
+                return path
+    except KeyError:
+        pass
+    path = OUTPUT_DIR / job_id / "full.wav"
+    if path.exists():
+        return path
+    raise HTTPException(status_code=404, detail="Job not found")
+
+
+def _job_segment_wav(job_id: str, index: int) -> Path:
+    try:
+        job = runner.get(job_id)
+        if job.status == "done":
+            for item in job.stats.get("segments") or []:
+                if int(item["index"]) == index:
+                    path = Path(item["path"])
+                    if path.exists():
+                        return path
+    except KeyError:
+        pass
+    path = OUTPUT_DIR / job_id / f"seg_{index:03d}.wav"
+    if path.exists():
+        return path
+    raise HTTPException(status_code=404, detail="Segment not found")
 
 
 @asynccontextmanager
@@ -336,7 +387,12 @@ def api_voice_audio(voice_id: str):
         raise HTTPException(status_code=404, detail="Voice not found")
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(profile["ref_audio"], media_type="audio/wav", filename=f"{voice_id}.wav")
+    return FileResponse(
+        audio_util.browser_wav(Path(profile["ref_audio"])),
+        media_type="audio/wav",
+        filename=f"{voice_id}.wav",
+        content_disposition_type="inline",
+    )
 
 
 @app.post("/api/jobs")
@@ -438,54 +494,44 @@ def api_get_job(job_id: str):
 
 
 @app.get("/api/jobs/{job_id}/audio")
-def api_job_audio(job_id: str):
-    try:
-        job = runner.get(job_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.status != "done" or not job.stats.get("output_path"):
-        raise HTTPException(status_code=409, detail="Audio is not ready")
-    path = Path(job.stats["output_path"])
-    return FileResponse(path, media_type="audio/wav", filename=f"{job_id}.wav")
+def api_job_audio(job_id: str, download: bool = False):
+    return _wav_response(_job_full_wav(job_id), f"{job_id}.wav", download)
 
 
 @app.get("/api/jobs/{job_id}/segments/{index}/audio")
-def api_job_segment_audio(job_id: str, index: int):
-    try:
-        job = runner.get(job_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.status != "done":
-        raise HTTPException(status_code=409, detail="Audio is not ready")
-    for item in job.stats.get("segments") or []:
-        if int(item["index"]) == index:
-            path = Path(item["path"])
-            return FileResponse(path, media_type="audio/wav", filename=f"{job_id}_{index:03d}.wav")
-    raise HTTPException(status_code=404, detail="Segment not found")
+def api_job_segment_audio(job_id: str, index: int, download: bool = False):
+    return _wav_response(_job_segment_wav(job_id, index), f"{job_id}_{index:03d}.wav", download)
 
 
 @app.get("/api/jobs/{job_id}/zip")
 def api_job_zip(job_id: str):
-    try:
-        job = runner.get(job_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.status != "done":
-        raise HTTPException(status_code=409, detail="Audio is not ready")
+    full = _job_full_wav(job_id)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        full = job.stats.get("output_path")
-        if full:
-            archive.write(full, f"{job_id}/full.wav")
-        for item in job.stats.get("segments") or []:
-            path = Path(item["path"])
-            if path.exists():
-                archive.write(path, f"{job_id}/seg_{int(item['index']):03d}.wav")
-    buffer.seek(0)
-    return StreamingResponse(
-        buffer,
+        archive.write(full, f"{job_id}/full.wav")
+        try:
+            job = runner.get(job_id)
+            items = job.stats.get("segments") or []
+        except KeyError:
+            items = []
+        if items:
+            for item in items:
+                path = Path(item["path"])
+                if path.exists():
+                    archive.write(path, f"{job_id}/seg_{int(item['index']):03d}.wav")
+        else:
+            for path in sorted(full.parent.glob("seg_*.wav")):
+                if path.name.endswith(".browser.wav"):
+                    continue
+                archive.write(path, f"{job_id}/{path.name}")
+    body = buffer.getvalue()
+    return Response(
+        body,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{job_id}.zip"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{job_id}.zip"',
+            "Content-Length": str(len(body)),
+        },
     )
 
 
