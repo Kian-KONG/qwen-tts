@@ -26,6 +26,7 @@ from .config import (
     DESIGN_MODEL_DIR,
     DESIGN_MODEL_ID,
     FRONTEND_DIST,
+    GAP_MS,
     LANGUAGE,
     LANGUAGES,
     OUTPUT_DIR,
@@ -80,18 +81,57 @@ def _skip_zip_name(name: str) -> bool:
     )
 
 
+def _job_clip_paths(job_id: str) -> list[Path]:
+    folder = OUTPUT_DIR / job_id
+    clips: list[Path] = []
+    seen: set[str] = set()
+    first_voice: str | None = None
+    for item in _job_item_list(job_id, "segments"):
+        path = Path(item.get("path") or "")
+        if not path.exists():
+            name = str(item.get("filename") or "")
+            if name:
+                path = folder / name
+        if not path.exists() or _skip_zip_name(path.name):
+            continue
+        voice = str(item.get("voice_id") or item.get("voice") or "")
+        if first_voice is None:
+            first_voice = voice
+        elif voice and first_voice and voice != first_voice:
+            continue
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        clips.append(path)
+    if not clips and folder.is_dir():
+        for path in sorted(folder.glob("*.wav")):
+            if _skip_zip_name(path.name):
+                continue
+            clips.append(path)
+    return clips
+
+
 def _job_full_wav(job_id: str) -> Path:
-    try:
-        job = runner.get(job_id)
-        if job.status == "done" and job.stats.get("output_path"):
-            path = Path(job.stats["output_path"])
-            if path.exists():
-                return path
-    except KeyError:
-        pass
-    path = OUTPUT_DIR / job_id / "full.wav"
-    if path.exists():
-        return path
+    folder = OUTPUT_DIR / job_id
+    dest = folder / "full.wav"
+    clips = _job_clip_paths(job_id)
+    if len(clips) > 1:
+        rebuild = True
+        if dest.exists():
+            try:
+                full_dur = audio_util.probe_duration(dest)
+                clip_dur = sum(audio_util.probe_duration(path) for path in clips)
+                rebuild = full_dur < clip_dur * 0.5
+            except Exception:
+                rebuild = True
+        if rebuild:
+            audio_util.concat_wav_files(clips, dest, gap_ms=GAP_MS)
+        return dest
+    if dest.exists():
+        return dest
+    if clips:
+        return clips[0]
     raise HTTPException(status_code=404, detail="Job not found")
 
 
@@ -762,14 +802,13 @@ def api_job_zip(job_id: str):
             if path.exists() and name not in added and not _skip_zip_name(name):
                 archive.write(path, name)
                 added.add(name)
-        if not added:
-            folder = OUTPUT_DIR / job_id
-            if folder.is_dir():
-                for path in sorted(folder.glob("*.wav")):
-                    if _skip_zip_name(path.name):
-                        continue
-                    archive.write(path, path.name)
-                    added.add(path.name)
+        folder = OUTPUT_DIR / job_id
+        if folder.is_dir():
+            for path in sorted(folder.glob("*.wav")):
+                if _skip_zip_name(path.name) or path.name in added:
+                    continue
+                archive.write(path, path.name)
+                added.add(path.name)
         if not added:
             raise HTTPException(status_code=404, detail="No clip files to pack")
     body = buffer.getvalue()

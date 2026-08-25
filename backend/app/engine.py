@@ -13,6 +13,7 @@ from .config import (
     CUSTOM_MODEL_DIR,
     DEFAULT_SPEAKER,
     DESIGN_MODEL_DIR,
+    GAP_MS,
     LANGUAGE,
     LANGUAGE_BY_ID,
     MODEL_DIR,
@@ -211,6 +212,7 @@ class TTSEngine:
         segment_dir.mkdir(parents=True, exist_ok=True)
         used_names: set[str] = set()
         segments: list[dict] = []
+        tracks: list[dict] = []
         clip_index = 0
         n_voices = max(1, len(voice_list))
 
@@ -276,18 +278,39 @@ class TTSEngine:
                             "path": str(out_seg),
                         }
                     )
+                if wavs:
+                    track_audio = audio_util.concat_with_gap(wavs, native_sr, GAP_MS)
+                    track_name = audio_util.unique_wav_name(segment_dir, "完整轨", voice_name, used_names)
+                    raw_track = segment_dir / f".track_{voice_offset + 1:03d}.raw.wav"
+                    out_track = segment_dir / track_name
+                    audio_util.write_wav(raw_track, track_audio, native_sr)
+                    audio_util.resample_for_video(raw_track, out_track)
+                    raw_track.unlink(missing_ok=True)
+                    track_duration = float(track_audio.size) / float(native_sr) if native_sr else 0.0
+                    tracks.append(
+                        {
+                            "index": len(tracks) + 1,
+                            "voice": voice_name,
+                            "voice_id": sid,
+                            "filename": track_name,
+                            "duration_sec": round(track_duration, 2),
+                            "path": str(out_track),
+                        }
+                    )
 
         elapsed = time.perf_counter() - started
-        first = Path(segments[0]["path"]) if segments else segment_dir / "full.wav"
+        first = Path(tracks[0]["path"]) if tracks else Path(segments[0]["path"]) if segments else segment_dir / "full.wav"
         full_alias = segment_dir / "full.wav"
         if first.exists() and full_alias.resolve() != first.resolve():
             shutil.copy2(first, full_alias)
-        first_id = str(voice_list[0].get("id") or "") if voice_list else ""
-        duration = sum(
-            float(item.get("duration_sec") or 0)
-            for item in segments
-            if not first_id or str(item.get("voice_id") or "") == first_id
-        )
+        duration = max((float(item.get("duration_sec") or 0) for item in tracks), default=0.0)
+        if not duration:
+            first_id = str(voice_list[0].get("id") or "") if voice_list else ""
+            duration = sum(
+                float(item.get("duration_sec") or 0)
+                for item in segments
+                if not first_id or str(item.get("voice_id") or "") == first_id
+            )
 
         stats = {
             "chunks": len(chunks),
@@ -304,7 +327,7 @@ class TTSEngine:
             "rtf": round(elapsed / duration, 3) if duration else None,
             "sample_rate": native_sr,
             "output_path": str(full_alias if full_alias.exists() else first),
-            "tracks": [],
+            "tracks": tracks,
             "segments": segments,
         }
         self.last_stats = {key: value for key, value in stats.items() if key not in {"segments", "tracks"}}

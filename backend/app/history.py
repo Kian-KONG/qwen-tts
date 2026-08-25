@@ -12,6 +12,23 @@ from .config import OUTPUT_DIR
 RECORD_NAME = "job.json"
 
 
+def _clip_wavs(folder: Path) -> list[Path]:
+    clips = []
+    for path in sorted(folder.glob("*.wav")):
+        name = path.name
+        stem = name.lower()
+        if (
+            name.startswith(".")
+            or ".browser." in name
+            or name == "full.wav"
+            or name.startswith("完整轨")
+            or stem.startswith("full.")
+        ):
+            continue
+        clips.append(path)
+    return clips
+
+
 def job_dir(job_id: str) -> Path:
     return OUTPUT_DIR / job_id
 
@@ -52,19 +69,21 @@ def persist_job(job: Any) -> None:
 def _infer(folder: Path) -> dict:
     full = folder / "full.wav"
     segments = []
-    for path in sorted(folder.glob("seg_*.wav")):
-        if ".browser." in path.name:
-            continue
-        try:
-            index = int(path.stem.split("_")[1])
-        except (IndexError, ValueError):
-            continue
+    for index, path in enumerate(_clip_wavs(folder), start=1):
         duration = None
         try:
             duration = round(probe_duration(path), 2)
         except Exception:
             pass
-        segments.append({"index": index, "text": "", "duration_sec": duration, "path": str(path)})
+        segments.append(
+            {
+                "index": index,
+                "text": "",
+                "filename": path.name,
+                "duration_sec": duration,
+                "path": str(path),
+            }
+        )
     audio_sec = None
     created_at = datetime.fromtimestamp(full.stat().st_mtime, tz=timezone.utc).isoformat()
     try:

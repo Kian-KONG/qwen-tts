@@ -215,6 +215,33 @@ def concat_with_gap(chunks: list[np.ndarray], sample_rate: int, gap_ms: int) -> 
     return np.concatenate(pieces)
 
 
+def concat_wav_files(paths: list[Path], dest: Path, gap_ms: int = 400) -> Path:
+    """Join existing clip WAVs into one 24-bit track. Used for /audio and leftover stub full.wav files."""
+    clips = [Path(path) for path in paths if Path(path).exists()]
+    if not clips:
+        raise FileNotFoundError("No clips to concatenate")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if len(clips) == 1:
+        if dest.resolve() != clips[0].resolve():
+            shutil.copy2(clips[0], dest)
+        return dest
+    chunks: list[np.ndarray] = []
+    sample_rate = OUTPUT_SAMPLE_RATE
+    for path in clips:
+        data, rate = sf.read(str(path), dtype="float32", always_2d=False)
+        sample_rate = int(rate) or sample_rate
+        chunks.append(to_float32(np.asarray(data).reshape(-1)))
+    audio = concat_with_gap(chunks, sample_rate, gap_ms)
+    raw = dest.with_name(f".{dest.name}.concat.raw.wav")
+    try:
+        write_wav(raw, audio, sample_rate)
+        resample_for_video(raw, dest)
+    finally:
+        raw.unlink(missing_ok=True)
+    return dest
+
+
 def write_wav(path: Path, audio: np.ndarray, sample_rate: int) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, to_float32(audio), sample_rate, subtype="PCM_16")

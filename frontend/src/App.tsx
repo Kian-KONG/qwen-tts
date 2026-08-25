@@ -195,6 +195,14 @@ function jobVoiceCount(job: Job): number {
   return Math.max(fromTracks, fromSpeakers, fromClips);
 }
 
+function jobClipCount(job: Job): number {
+  return Math.max(job.segments?.length || 0, job.chunks || 0);
+}
+
+function jobNeedsZip(job: Job): boolean {
+  return jobClipCount(job) > 1 || jobVoiceCount(job) > 1;
+}
+
 function storedJson<T>(key: string, fallback: T): T {
   try {
     const raw = window.localStorage.getItem(key);
@@ -864,8 +872,7 @@ export default function App() {
   }
 
   function onDownloadHistory(item: Job) {
-    const clips = item.segments?.length || 0;
-    if (clips > 1 || jobVoiceCount(item) > 1) {
+    if (jobNeedsZip(item)) {
       const zip = item.zip_url || apiUrl(`/api/jobs/${item.id}/zip`);
       void onDownload(zip, `${item.id}.zip`);
       return;
@@ -1393,8 +1400,8 @@ export default function App() {
           <h2>3. 分段成片</h2>
           <p className="hint">
             {API_BASE
-              ? "成片保存在 Mac 的 data/output/。打包 zip 只有分段短音频，没有合成完整轨。24-bit 大文件建议在本机打开 http://127.0.0.1:8000 下载。"
-              : "打包 zip 只有分段短音频「文本 - 声色.wav」，不会合成一条。如果要一整段，文稿不要编成 1. 2. 3.。试听是 16-bit，下载是 24-bit。"}
+              ? "成片保存在 Mac 的 data/output/。打包 zip 是每一段短音频；整轨是拼好的一条 WAV。24-bit 大文件建议在本机打开 http://127.0.0.1:8000 下载。"
+              : "打包 zip 是「文本 - 声色.wav」分段。整轨 WAV 按编号拼成一条。如果只要一整段，文稿不要编成 1. 2. 3.。试听是 16-bit，下载是 24-bit。"}
           </p>
         </div>
         {history.length ? (
@@ -1425,7 +1432,7 @@ export default function App() {
                       className="ghost mini"
                       onClick={() => void onDownloadHistory(item)}
                     >
-                      {(item.segments?.length || 0) > 1 || jobVoiceCount(item) > 1 ? "打包分段" : "下载"}
+                      {jobNeedsZip(item) ? "打包分段" : "下载"}
                     </button>
                     <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
                       删除
@@ -1455,11 +1462,22 @@ export default function App() {
             {job.status === "done" && job.local_dir && !API_BASE ? (
               <p className="hint">本机目录 {job.local_dir} · 文件名「文本 - 声色.wav」</p>
             ) : null}
-            {job.status === "done" && zipUrl && (job.segments?.length || 0) > 1 ? (
+            {job.status === "done" && jobNeedsZip(job) ? (
               <div className="tracks">
-                <button type="button" className="ghost" onClick={() => void onDownload(zipUrl, `${job.id}.zip`)}>
-                  打包全部分段
-                </button>
+                {zipUrl ? (
+                  <button type="button" className="ghost" onClick={() => void onDownload(zipUrl, `${job.id}.zip`)}>
+                    打包全部分段
+                  </button>
+                ) : null}
+                {job.download_url ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => void onDownload(withDownload(job.download_url || ""), `${job.id}.wav`)}
+                  >
+                    下载整轨
+                  </button>
+                ) : null}
               </div>
             ) : null}
             {job.status === "done" && job.segments?.length ? (
