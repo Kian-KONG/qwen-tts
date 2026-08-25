@@ -32,11 +32,13 @@ def list_voices() -> list[dict]:
     voices = []
     for item in load_index():
         wav = VOICES_DIR / f"{item['id']}.wav"
-        if wav.exists():
-            try:
-                item = {**item, "duration_sec": round(probe_duration(wav), 2)}
-            except Exception:
-                item = {**item, "duration_sec": None}
+        txt = VOICES_DIR / f"{item['id']}.txt"
+        if not wav.exists() or not txt.exists():
+            continue
+        try:
+            item = {**item, "duration_sec": round(probe_duration(wav), 2)}
+        except Exception:
+            item = {**item, "duration_sec": None}
         voices.append(item)
     return voices
 
@@ -78,6 +80,30 @@ def create_voice(name: str, audio_path: Path, ref_text: str) -> dict:
     items.append(item)
     save_index(items)
     return {**item, "ref_audio": str(dest_audio)}
+
+
+def rename_voice(voice_id: str, name: str) -> dict:
+    cleaned = name.strip()
+    if not cleaned:
+        raise ValueError("name is required")
+    items = load_index()
+    found = None
+    for item in items:
+        if item["id"] == voice_id:
+            item["name"] = cleaned
+            found = item
+            break
+    if found is None:
+        raise KeyError(voice_id)
+    save_index(items)
+    wav = VOICES_DIR / f"{voice_id}.wav"
+    duration = None
+    try:
+        if wav.exists():
+            duration = round(probe_duration(wav), 2)
+    except Exception:
+        duration = None
+    return {**found, "duration_sec": duration}
 
 
 def delete_voice(voice_id: str) -> None:

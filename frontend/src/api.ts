@@ -176,6 +176,23 @@ export async function previewSplit(text: string, language: string): Promise<Prev
   return data.segments ?? [];
 }
 
+export type ImportedScript = {
+  markdown: string;
+  count: number;
+  segments?: PreviewSegment[];
+};
+
+export async function importScript(file: File): Promise<ImportedScript> {
+  const body = new FormData();
+  body.set("file", file);
+  const res = await request("/api/import-script", { method: "POST", body });
+  return res.json();
+}
+
+export function voiceAudioUrl(id: string): string {
+  return apiUrl(`/api/voices/${id}/audio`);
+}
+
 export async function listSpeakers(): Promise<{ data: Speaker[]; default: string }> {
   const res = await request("/api/speakers");
   const data = await res.json();
@@ -194,6 +211,15 @@ export async function createVoice(name: string, file: File, refText: string): Pr
   body.set("ref_text", refText);
   body.set("ref_audio", file);
   const res = await request("/api/voices", { method: "POST", body });
+  return res.json();
+}
+
+export async function renameVoice(id: string, name: string): Promise<Voice> {
+  const res = await request(`/api/voices/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
   return res.json();
 }
 

@@ -8,9 +8,12 @@ import {
   getHealth,
   getJob,
   getTranscribeJob,
+  importScript,
   listLanguages,
   listSpeakers,
   listVoices,
+  renameVoice,
+  voiceAudioUrl,
   type Health,
   type Job,
   type Language,
@@ -85,6 +88,56 @@ const ASR_STAGES: Record<string, string> = {
   error: "失败",
 };
 
+const VOICE_MODE_KEY = "qwen-tts-voice-mode";
+const VOICE_ID_KEY = "qwen-tts-voice-id";
+
+function stored(key: string, fallback: string): string {
+  try {
+    return window.localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function storedVoiceMode(): "preset" | "design" | "clone" {
+  const value = stored(VOICE_MODE_KEY, "preset");
+  return value === "design" || value === "clone" || value === "preset" ? value : "preset";
+}
+
+function FileField({
+  label,
+  accept,
+  file,
+  emptyText = "未选择文件",
+  buttonText,
+  onChange,
+}: {
+  label: string;
+  accept: string;
+  file?: File | null;
+  emptyText?: string;
+  buttonText?: string;
+  onChange: (file: File | null) => void;
+}) {
+  return (
+    <label className="file-field-wrap">
+      {label}
+      <span className="file-field">
+        <span className="file-name">{file ? file.name : emptyText}</span>
+        <span className="file-btn">{buttonText || (file ? "更换文件" : "选择文件")}</span>
+        <input
+          type="file"
+          accept={accept}
+          onChange={(event) => {
+            onChange(event.target.files?.[0] ?? null);
+            event.target.value = "";
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [languages, setLanguages] = useState<Language[]>([]);
@@ -92,9 +145,9 @@ export default function App() {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [speaker, setSpeaker] = useState("Ryan");
-  const [voiceId, setVoiceId] = useState("");
+  const [voiceId, setVoiceId] = useState(() => stored(VOICE_ID_KEY, ""));
   const [voiceName, setVoiceName] = useState("Studio A");
-  const [voiceMode, setVoiceMode] = useState<"preset" | "design" | "clone">("preset");
+  const [voiceMode, setVoiceMode] = useState<"preset" | "design" | "clone">(storedVoiceMode);
   const [instruct, setInstruct] = useState(VOICE_PRESETS[0].text);
   const [styleInstruct, setStyleInstruct] = useState("");
   const [refFile, setRefFile] = useState<File | null>(null);
@@ -104,12 +157,17 @@ export default function App() {
   const [asrJob, setAsrJob] = useState<Transcript | null>(null);
   const [asrText, setAsrText] = useState("");
   const [asrCopied, setAsrCopied] = useState(false);
+  const [excelName, setExcelName] = useState("");
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
   const [batchSize, setBatchSize] = useState(4);
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const voicePlayerRef = useRef<HTMLAudioElement | null>(null);
 
   const filledSegments = useMemo(() => parseMarkdownList(markdown), [markdown]);
 
@@ -126,7 +184,10 @@ export default function App() {
       setLanguages(nextLanguages);
       setSpeakers(nextSpeakers.data);
       setSpeaker((current) => current || nextSpeakers.default || "Ryan");
-      setVoiceId((current) => current || nextVoices[0]?.id || "");
+      setVoiceId((current) => {
+        if (current && nextVoices.some((item) => item.id === current)) return current;
+        return nextVoices[0]?.id || "";
+      });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "无法连接后端");
     }
@@ -137,6 +198,15 @@ export default function App() {
     const timer = window.setInterval(() => void refresh(), 15000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(VOICE_MODE_KEY, voiceMode);
+      if (voiceId) window.localStorage.setItem(VOICE_ID_KEY, voiceId);
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, [voiceMode, voiceId]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error") return;
@@ -195,6 +265,18 @@ export default function App() {
 
   function tidyNumbers() {
     setMarkdown(toMarkdown(filledSegments));
+  }
+
+  async function onImportScript(file: File | null) {
+    if (!file) return;
+    try {
+      const result = await importScript(file);
+      setMarkdown(result.markdown);
+      setExcelName(file.name);
+      setMessage(`已从表格导入 ${result.count} 段，每个单元格一段`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导入失败");
+    }
   }
 
   function onMarkdownKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -319,10 +401,61 @@ export default function App() {
     }
   }
 
+  async function togglePlayVoice(id: string) {
+    const player = voicePlayerRef.current;
+    if (!player) return;
+    if (playingVoiceId === id && !player.paused) {
+      player.pause();
+      setPlayingVoiceId(null);
+      return;
+    }
+    setVoiceId(id);
+    if (playingVoiceId !== id) {
+      player.src = voiceAudioUrl(id);
+    }
+    try {
+      await player.play();
+      setPlayingVoiceId(id);
+    } catch (error) {
+      setPlayingVoiceId(null);
+      setMessage(error instanceof Error ? error.message : "无法播放音色");
+    }
+  }
+
+  function startRenameVoice(voice: Voice) {
+    setVoiceId(voice.id);
+    setRenamingId(voice.id);
+    setRenameValue(voice.name);
+  }
+
+  async function onRenameVoice(event: FormEvent) {
+    event.preventDefault();
+    if (!renamingId) return;
+    const name = renameValue.trim();
+    if (!name) {
+      setMessage("请填写音色名称");
+      return;
+    }
+    try {
+      const updated = await renameVoice(renamingId, name);
+      setRenamingId(null);
+      setVoiceId(updated.id);
+      await refresh();
+      setMessage(`已重命名为 ${updated.name}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "重命名失败");
+    }
+  }
+
   async function onDeleteVoice() {
     if (!voiceId) return;
+    if (playingVoiceId === voiceId) {
+      voicePlayerRef.current?.pause();
+      setPlayingVoiceId(null);
+    }
     await deleteVoice(voiceId);
     setVoiceId("");
+    setRenamingId(null);
     await refresh();
   }
 
@@ -372,14 +505,15 @@ export default function App() {
         </div>
         <div className="stack">
           <div className="row">
-            <label className="grow">
-              音频
-              <input
-                type="file"
+            <div className="grow">
+              <FileField
+                label="音频"
                 accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
-                onChange={(e) => setAsrFile(e.target.files?.[0] ?? null)}
+                file={asrFile}
+                emptyText="wav / m4a / mp3"
+                onChange={setAsrFile}
               />
-            </label>
+            </div>
             <label>
               语言
               <select value={asrLanguage} onChange={(e) => setAsrLanguage(e.target.value)}>
@@ -449,7 +583,7 @@ export default function App() {
               描述音色
             </button>
             <button type="button" className={voiceMode === "clone" ? "active" : "ghost"} onClick={() => setVoiceMode("clone")}>
-              声音克隆
+              声音克隆{voices.length ? `（${voices.length}）` : ""}
             </button>
           </div>
           {voiceMode === "preset" ? (
@@ -514,21 +648,68 @@ export default function App() {
           ) : (
             <>
               <p className="hint">
-                录 3–10 秒干净人声，语言尽量和文稿一致，并写上逐字稿。没有稿可先用上方语音转文字识别。iPhone 的 m4a / mp3 也可以，保存时会转成 WAV。
+                上传过的音色保存在本机 `data/voices/`，刷新后仍可点选复用。新音色录 3–10 秒干净人声，并写上逐字稿。
               </p>
+              {voices.length ? (
+                <div className="stack">
+                  <audio
+                    ref={voicePlayerRef}
+                    className="voice-player"
+                    onEnded={() => setPlayingVoiceId(null)}
+                  />
+                  <div className="voice-list">
+                    {voices.map((voice) => (
+                      <div key={voice.id} className={voiceId === voice.id ? "voice-card on" : "voice-card"}>
+                        <button type="button" className="voice-select" onClick={() => setVoiceId(voice.id)}>
+                          <strong>{voice.name}</strong>
+                          <small>
+                            {voice.duration_sec ? `${voice.duration_sec}s` : "已保存"}
+                            {voice.ref_text ? ` · ${voice.ref_text.slice(0, 36)}` : ""}
+                          </small>
+                        </button>
+                        <div className="voice-actions">
+                          <button type="button" className="ghost mini" onClick={() => void togglePlayVoice(voice.id)}>
+                            {playingVoiceId === voice.id ? "暂停" : "播放"}
+                          </button>
+                          <button type="button" className="ghost mini" onClick={() => startRenameVoice(voice)}>
+                            重命名
+                          </button>
+                        </div>
+                        {renamingId === voice.id ? (
+                          <form className="voice-rename" onSubmit={(event) => void onRenameVoice(event)}>
+                            <input
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              autoFocus
+                              placeholder="新的音色名称"
+                            />
+                            <button type="submit" disabled={busy || !renameValue.trim()}>
+                              保存
+                            </button>
+                            <button type="button" className="ghost" onClick={() => setRenamingId(null)}>
+                              取消
+                            </button>
+                          </form>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="hint">还没有保存过克隆音色。保存一次后会留在本机，下次直接选用。</p>
+              )}
               <form className="stack" onSubmit={onSaveVoice}>
                 <label>
                   音色名称
                   <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
                 </label>
-                <label>
-                  参考音频
-                  <input
-                    type="file"
-                    accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
-                    onChange={(e) => setRefFile(e.target.files?.[0] ?? null)}
-                  />
-                </label>
+                <FileField
+                  label="参考音频"
+                  accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
+                  file={refFile}
+                  emptyText="wav / m4a / mp3，3–10 秒"
+                  onChange={setRefFile}
+                />
                 <label>
                   参考音频文字稿
                   <textarea
@@ -542,17 +723,8 @@ export default function App() {
                   <button type="submit" disabled={busy}>
                     保存到音色库
                   </button>
-                  <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>
-                    <option value="">本次上传 / 未选择</option>
-                    {voices.map((voice) => (
-                      <option key={voice.id} value={voice.id}>
-                        {voice.name}
-                        {voice.duration_sec ? ` · ${voice.duration_sec}s` : ""}
-                      </option>
-                    ))}
-                  </select>
                   <button type="button" className="ghost" onClick={() => void onDeleteVoice()} disabled={!voiceId}>
-                    删除
+                    删除所选
                   </button>
                 </div>
               </form>
@@ -585,7 +757,16 @@ export default function App() {
                 />
               </label>
             </div>
-            <p className="hint">用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段。回车会自动下一项；成片仍按编号合并。需要从音频出文稿时，用上方的语音转文字。</p>
+            <p className="hint">
+              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段。也可以导入 Excel / CSV，每个非空单元格就是一段语音。
+            </p>
+            <FileField
+              label="导入 Excel / CSV"
+              accept=".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+              emptyText={excelName || "xlsx / csv，每个单元格一段"}
+              buttonText="导入表格"
+              onChange={(file) => void onImportScript(file)}
+            />
             <textarea
               ref={editorRef}
               className="markdown-editor"

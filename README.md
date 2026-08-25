@@ -4,8 +4,9 @@
 
 - **预设说话人**（CustomVoice）：点选 Ryan / Vivian 等 9 个官方音色，贴文字即可配
 - **描述音色**（VoiceDesign）：写一段声音描述造音色
-- **声音克隆**（Base）：3–10 秒参考音频 + 逐字稿
+- **声音克隆**（Base）：3–10 秒参考音频 + 逐字稿，保存在本机 `data/voices/` 可反复选用
 - **语音转文字**（Qwen3-ASR 1.7B）：上传音频生成文稿或克隆逐字稿
+- **Excel 导入**：每个非空单元格一段语音，按编号配音
 
 React 前端 + Python 后端，推理走 MLX。16GB 机器同一时间只加载一个大模型：配音和转写会互相卸掉对方，避免两个 1.7B 同时占满内存。
 
@@ -123,10 +124,19 @@ curl -s "http://127.0.0.1:8000/api/transcribe/$JOB"
 
 OpenAI 兼容：`POST /v1/audio/transcriptions`，字段 `file`。
 
+## Excel 文稿
+
+页面「Markdown 文稿」里导入 `.xlsx` / `.csv`。每个非空单元格变成一段语音；表头（序号 / 文案等）和行号列会跳过。编号列表不会再按句子切开，所以一格就是一条成片。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/import-script \
+  -F "file=@./script.xlsx"
+```
+
 ## 准备参考音频
 
 1. 录 3–10 秒干净英文，尽量 44.1kHz / 24bit WAV
-2. 写好逐字稿，保存到音色库后再配长文稿
+2. 写好逐字稿，点「保存到音色库」。文件写在 `data/voices/<id>.wav` + `.txt`，下次在「声音克隆」里直接点选复用。
 
 麦克风示例：
 

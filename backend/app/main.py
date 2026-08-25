@@ -37,6 +37,7 @@ from .asr import asr_engine, asr_runner, public_asr_job
 from .chunking import preview_segments
 from .engine import engine
 from .jobs import public_job, runner
+from .script_import import import_spreadsheet
 
 
 def _check_key(authorization: Optional[str]) -> None:
@@ -84,6 +85,10 @@ class SpeechRequest(BaseModel):
 class SplitRequest(BaseModel):
     text: str
     language: str = LANGUAGE
+
+
+class VoiceRenameRequest(BaseModel):
+    name: str
 
 
 def _normalize_mode(mode: str | None) -> str:
@@ -220,6 +225,20 @@ def api_split(payload: SplitRequest):
     return {"language": language, "count": len(segments), "segments": segments}
 
 
+@app.post("/api/import-script")
+async def api_import_script(file: UploadFile = File(...)):
+    filename = file.filename or "script.xlsx"
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+    try:
+        return import_spreadsheet(data, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"无法读取表格：{exc}") from exc
+
+
 @app.post("/api/transcribe")
 async def api_transcribe(
     audio: UploadFile = File(...),
@@ -293,10 +312,31 @@ async def api_create_voice(
     return item
 
 
+@app.patch("/api/voices/{voice_id}")
+def api_rename_voice(voice_id: str, payload: VoiceRenameRequest):
+    try:
+        return voices.rename_voice(voice_id, payload.name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Voice not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.delete("/api/voices/{voice_id}")
 def api_delete_voice(voice_id: str):
     voices.delete_voice(voice_id)
     return {"ok": True}
+
+
+@app.get("/api/voices/{voice_id}/audio")
+def api_voice_audio(voice_id: str):
+    try:
+        profile = voices.get_voice(voice_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Voice not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(profile["ref_audio"], media_type="audio/wav", filename=f"{voice_id}.wav")
 
 
 @app.post("/api/jobs")
