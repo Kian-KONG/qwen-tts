@@ -10,7 +10,14 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from .config import ATEMPO_MAX, ATEMPO_MIN, OUTPUT_SAMPLE_RATE, SILENCE_PAD_MS
+from .config import (
+    ATEMPO_MAX,
+    ATEMPO_MIN,
+    ATEMPO_SHORT_MAX,
+    ATEMPO_SHORT_MIN,
+    OUTPUT_SAMPLE_RATE,
+    SILENCE_PAD_MS,
+)
 
 _UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\n\r\t]+')
 
@@ -59,23 +66,42 @@ def to_float32(audio) -> np.ndarray:
 _PUNCT = re.compile(r"[。！？.!?…，,、；;：:\s\"'「」『』（）()\[\]【】]+")
 _SHORT_END = re.compile(r"[？！!?]$")
 _CJK = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+_PAIR_TAILS = (
+    (re.compile(r"(成功|失败)$"), "结果"),
+    (re.compile(r"(太远|太近)$"), "太距"),
+    (re.compile(r"(已打开|已关闭)$"), "已开关"),
+    (re.compile(r"(打开|关闭)$"), "开关"),
+)
 
 
 def spoken_len(text: str) -> int:
     return len(_PUNCT.sub("", text or ""))
 
 
-def char_bucket(text: str) -> int:
-    n = spoken_len(text)
-    if n <= 0:
-        return 0
-    if n <= 3:
-        return 3
-    if n <= 6:
-        return 6
-    if n <= 10:
-        return 10
-    return 0
+def pair_key(text: str) -> str | None:
+    raw = _PUNCT.sub("", text or "").strip()
+    if not raw:
+        return None
+    for pattern, token in _PAIR_TAILS:
+        if pattern.search(raw):
+            return pattern.sub(token, raw)
+    return None
+
+
+def align_group_key(text: str) -> str | None:
+    pair = pair_key(text)
+    if pair:
+        return f"pair:{pair}"
+    count = spoken_len(text)
+    if count <= 0:
+        return None
+    return f"len:{count}"
+
+
+def atempo_range(texts: list[str]) -> tuple[float, float]:
+    if texts and max(spoken_len(item) for item in texts) <= 8:
+        return ATEMPO_SHORT_MIN, ATEMPO_SHORT_MAX
+    return ATEMPO_MIN, ATEMPO_MAX
 
 
 def normalize_tts_text(text: str) -> str:
@@ -115,12 +141,16 @@ def trim_silence(
     return array[start:end]
 
 
-def time_stretch(audio: np.ndarray, sample_rate: int, tempo: float) -> np.ndarray:
+def time_stretch(
+    audio: np.ndarray,
+    sample_rate: int,
+    tempo: float,
+    lo: float = ATEMPO_MIN,
+    hi: float = ATEMPO_MAX,
+) -> np.ndarray:
     array = to_float32(audio)
-    tempo = float(tempo)
+    tempo = min(float(hi), max(float(lo), float(tempo)))
     if array.size == 0 or abs(tempo - 1.0) < 0.01:
-        return array
-    if tempo < ATEMPO_MIN or tempo > ATEMPO_MAX:
         return array
     ffmpeg = ffmpeg_bin()
     if ffmpeg is None:
@@ -147,10 +177,7 @@ def time_stretch(audio: np.ndarray, sample_rate: int, tempo: float) -> np.ndarra
             check=True,
             capture_output=True,
         )
-        stretched, rate = sf.read(str(dst), dtype="float32")
-        if int(rate) != int(sample_rate) and stretched.size:
-            # keep native rate; resample_for_video happens later
-            pass
+        stretched, _rate = sf.read(str(dst), dtype="float32")
         return to_float32(stretched)
     except Exception:
         return array
@@ -159,6 +186,16 @@ def time_stretch(audio: np.ndarray, sample_rate: int, tempo: float) -> np.ndarra
             src.unlink(missing_ok=True)
         if dst:
             dst.unlink(missing_ok=True)
+
+
+def pad_to_duration(audio: np.ndarray, sample_rate: int, seconds: float) -> np.ndarray:
+    array = to_float32(audio)
+    if sample_rate <= 0 or seconds <= 0:
+        return array
+    need = int(round(float(seconds) * sample_rate))
+    if array.size >= need:
+        return array
+    return np.concatenate([array, np.zeros(need - array.size, dtype=np.float32)])
 
 
 def align_clip_lengths(
@@ -170,15 +207,16 @@ def align_clip_lengths(
 
     if sample_rate <= 0 or len(wavs) != len(texts):
         return wavs
-    groups: dict[int, list[int]] = defaultdict(list)
+    groups: dict[str, list[int]] = defaultdict(list)
     for index, text in enumerate(texts):
-        bucket = char_bucket(text)
-        if bucket:
-            groups[bucket].append(index)
+        key = align_group_key(text)
+        if key:
+            groups[key].append(index)
     aligned = list(wavs)
-    for indexes in groups.values():
+    for key, indexes in groups.items():
         if len(indexes) < 2:
             continue
+        lo, hi = atempo_range([texts[i] for i in indexes])
         durations = [aligned[i].size / float(sample_rate) for i in indexes]
         target = float(np.median(np.array(durations, dtype=np.float64)))
         if target <= 0:
@@ -187,9 +225,11 @@ def align_clip_lengths(
             current = aligned[index].size / float(sample_rate)
             if current <= 0:
                 continue
-            tempo = current / target
-            if ATEMPO_MIN <= tempo <= ATEMPO_MAX:
-                aligned[index] = time_stretch(aligned[index], sample_rate, tempo)
+            aligned[index] = time_stretch(aligned[index], sample_rate, current / target, lo=lo, hi=hi)
+        if key.startswith("pair:"):
+            target = max(aligned[i].size / float(sample_rate) for i in indexes)
+        for index in indexes:
+            aligned[index] = pad_to_duration(aligned[index], sample_rate, target)
     return aligned
 
 
@@ -215,8 +255,24 @@ def concat_with_gap(chunks: list[np.ndarray], sample_rate: int, gap_ms: int) -> 
     return np.concatenate(pieces)
 
 
+def write_master_wav(path: Path, audio: np.ndarray, sample_rate: int) -> Path:
+    """Write 44.1kHz 24-bit PCM, same master format as packed clip downloads."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    audio = to_float32(audio)
+    if int(sample_rate) != OUTPUT_SAMPLE_RATE:
+        raw = path.with_name(f".{path.name}.master.raw.wav")
+        try:
+            sf.write(str(raw), audio, int(sample_rate), format="WAV", subtype="PCM_24")
+            return resample_for_video(raw, path)
+        finally:
+            raw.unlink(missing_ok=True)
+    sf.write(str(path), audio, OUTPUT_SAMPLE_RATE, format="WAV", subtype="PCM_24")
+    return path
+
+
 def concat_wav_files(paths: list[Path], dest: Path, gap_ms: int = 400) -> Path:
-    """Join existing clip WAVs into one 24-bit track. Used for /audio and leftover stub full.wav files."""
+    """Join packed clip WAVs into one 24-bit track without a 16-bit round trip."""
     clips = [Path(path) for path in paths if Path(path).exists()]
     if not clips:
         raise FileNotFoundError("No clips to concatenate")
@@ -233,13 +289,7 @@ def concat_wav_files(paths: list[Path], dest: Path, gap_ms: int = 400) -> Path:
         sample_rate = int(rate) or sample_rate
         chunks.append(to_float32(np.asarray(data).reshape(-1)))
     audio = concat_with_gap(chunks, sample_rate, gap_ms)
-    raw = dest.with_name(f".{dest.name}.concat.raw.wav")
-    try:
-        write_wav(raw, audio, sample_rate)
-        resample_for_video(raw, dest)
-    finally:
-        raw.unlink(missing_ok=True)
-    return dest
+    return write_master_wav(dest, audio, sample_rate)
 
 
 def write_wav(path: Path, audio: np.ndarray, sample_rate: int) -> Path:
@@ -334,6 +384,15 @@ def browser_wav(path: Path) -> Path:
 def probe_duration(path: Path) -> float:
     info = sf.info(str(path))
     return float(info.frames) / float(info.samplerate)
+
+
+def is_master_wav(path: Path) -> bool:
+    try:
+        info = sf.info(str(path))
+    except Exception:
+        return False
+    subtype = str(getattr(info, "subtype", "") or "").upper()
+    return int(info.samplerate) == OUTPUT_SAMPLE_RATE and "24" in subtype
 
 
 def _is_pcm_wav(path: Path) -> bool:

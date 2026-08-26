@@ -340,6 +340,34 @@ label.check input {
   accent-color: var(--accent);
 }
 
+.temp-control {
+  display: grid;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.temp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.temp-row input[type="range"] {
+  flex: 1;
+  min-height: 0;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.temp-row span {
+  width: 3.2em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
 .stepper {
   display: flex;
   align-items: center;
@@ -554,6 +582,7 @@ button.rec-stop {
 
 .history-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

@@ -119,6 +119,7 @@ class TTSEngine:
             return dest
         text, lang_code = SPEAKER_PREVIEW.get(meta.get("native") or "English", SPEAKER_PREVIEW["English"])
         dest.parent.mkdir(parents=True, exist_ok=True)
+        self._temperature = TTS_TEMPERATURE
         with self.lock:
             self._load_unlocked("preset")
             collected = self._generate_preset_batch([text], speaker_id, lang_code, "", stable=True)
@@ -142,9 +143,11 @@ class TTSEngine:
         speaker: str = "",
         voices: list[dict] | None = None,
         stable: bool = True,
+        temperature: float | None = None,
         progress_cb=None,
     ) -> dict:
         mode = normalize_engine_mode(mode)
+        self._temperature = TTS_TEMPERATURE if temperature is None else float(temperature)
         lang = LANGUAGE_BY_ID.get(language, LANGUAGE_BY_ID["Auto"])
         lang_code = lang["lang_code"]
         chunks = chunking.split_script(text, language)
@@ -258,6 +261,7 @@ class TTSEngine:
                     wavs = audio_util.stabilize_clips(wavs, chunks, native_sr)
 
                 voice_name = str(voice.get("name") or sid)
+                clip_paths: list[Path] = []
                 for chunk, wav in zip(chunks, wavs):
                     clip_index += 1
                     filename = audio_util.unique_wav_name(segment_dir, chunk, voice_name, used_names)
@@ -267,6 +271,7 @@ class TTSEngine:
                     audio_util.resample_for_video(raw_path, out_seg)
                     raw_path.unlink(missing_ok=True)
                     duration = float(wav.size) / float(native_sr) if native_sr else 0.0
+                    clip_paths.append(out_seg)
                     segments.append(
                         {
                             "index": clip_index,
@@ -278,22 +283,17 @@ class TTSEngine:
                             "path": str(out_seg),
                         }
                     )
-                if wavs:
-                    track_audio = audio_util.concat_with_gap(wavs, native_sr, GAP_MS)
+                if clip_paths:
                     track_name = audio_util.unique_wav_name(segment_dir, "完整轨", voice_name, used_names)
-                    raw_track = segment_dir / f".track_{voice_offset + 1:03d}.raw.wav"
                     out_track = segment_dir / track_name
-                    audio_util.write_wav(raw_track, track_audio, native_sr)
-                    audio_util.resample_for_video(raw_track, out_track)
-                    raw_track.unlink(missing_ok=True)
-                    track_duration = float(track_audio.size) / float(native_sr) if native_sr else 0.0
+                    audio_util.concat_wav_files(clip_paths, out_track, gap_ms=GAP_MS)
                     tracks.append(
                         {
                             "index": len(tracks) + 1,
                             "voice": voice_name,
                             "voice_id": sid,
                             "filename": track_name,
-                            "duration_sec": round(track_duration, 2),
+                            "duration_sec": round(audio_util.probe_duration(out_track), 2),
                             "path": str(out_track),
                         }
                     )
@@ -334,13 +334,14 @@ class TTSEngine:
         return stats
 
     def _decode_kwargs(self, stable: bool) -> dict:
-        if not stable:
-            return {}
-        return {
-            "temperature": TTS_TEMPERATURE,
-            "top_p": TTS_TOP_P,
-            "repetition_penalty": TTS_REPETITION_PENALTY,
+        extra = {
+            "temperature": max(0.05, min(1.5, float(getattr(self, "_temperature", TTS_TEMPERATURE)))),
         }
+        if not stable:
+            return extra
+        extra["top_p"] = TTS_TOP_P
+        extra["repetition_penalty"] = TTS_REPETITION_PENALTY
+        return extra
 
     def _generate_batch(
         self,

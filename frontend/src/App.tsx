@@ -203,6 +203,25 @@ function jobNeedsZip(job: Job): boolean {
   return jobClipCount(job) > 1 || jobVoiceCount(job) > 1;
 }
 
+function TempSlider({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  return (
+    <label className="temp-control">
+      温度 temp
+      <div className="temp-row">
+        <input
+          type="range"
+          min={0.1}
+          max={1}
+          step={0.05}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+        />
+        <span>{value.toFixed(2)}</span>
+      </div>
+    </label>
+  );
+}
+
 function storedJson<T>(key: string, fallback: T): T {
   try {
     const raw = window.localStorage.getItem(key);
@@ -270,6 +289,7 @@ export default function App() {
   const [instruct, setInstruct] = useState(VOICE_PRESETS[0].text);
   const [styleInstruct, setStyleInstruct] = useState("");
   const [stableDub, setStableDub] = useState(true);
+  const [temperature, setTemperature] = useState(0.3);
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refText, setRefText] = useState(CLONE_PROMPT);
   const [recStatus, setRecStatus] = useState<"idle" | "recording" | "ready">("idle");
@@ -734,6 +754,7 @@ export default function App() {
         designs,
         styleInstruct: styleInstruct || undefined,
         stable: stableDub,
+        temperature,
         voiceIds: selectedVoiceIds.length ? selectedVoiceIds : undefined,
         refAudio: pendingClone ? refFile || undefined : undefined,
         refText: pendingClone ? refText : undefined,
@@ -871,14 +892,14 @@ export default function App() {
     }
   }
 
-  function onDownloadHistory(item: Job) {
-    if (jobNeedsZip(item)) {
-      const zip = item.zip_url || apiUrl(`/api/jobs/${item.id}/zip`);
-      void onDownload(zip, `${item.id}.zip`);
-      return;
-    }
+  function onDownloadZip(item: Job) {
+    const zip = item.zip_url || apiUrl(`/api/jobs/${item.id}/zip`);
+    void onDownload(zip, `${item.id}.zip`);
+  }
+
+  function onDownloadFullTrack(item: Job) {
     const segment = item.segments?.[0];
-    if (segment?.url) {
+    if (!jobNeedsZip(item) && segment?.url) {
       void onDownload(withDownload(segment.url), wavName(segment.filename || item.title || item.id));
       return;
     }
@@ -1090,6 +1111,8 @@ export default function App() {
               <p className="hint">还没有选音色。从下面三类里点选，描述音色点「加入已选」。</p>
             )}
           </div>
+          <TempSlider value={temperature} onChange={setTemperature} />
+          <p className="hint">越低越稳、越高越活。所有已选音色配音都用这个温度。稳定配音另外管句号和时长。</p>
 
           <div className="voice-block">
             <h3>预设说话人</h3>
@@ -1334,10 +1357,11 @@ export default function App() {
               <input type="checkbox" checked={stableDub} onChange={(e) => setStableDub(e.target.checked)} />
               稳定配音
             </label>
+            <TempSlider value={temperature} onChange={setTemperature} />
             <p className="hint">
               {stableDub
                 ? "低温采样、短句统一句号、剪掉头尾静音，相近字数会轻微拉齐时长。关闭则恢复模型自由发挥。"
-                : "已关闭稳定配音，短句语气和时长会更随性。"}
+                : "已关闭稳定配音，短句语气和时长会更随性。温度仍按上面的 temp 生效。"}
             </p>
             <p className="hint">
               用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段短音频，不会连读成一条。下载文件名是「文本 - 声色.wav」。也可以导入 Excel / CSV，每个非空单元格就是一段。
@@ -1427,13 +1451,20 @@ export default function App() {
                 </button>
                 {item.status === "done" ? (
                   <div className="history-actions">
-                    <button
-                      type="button"
-                      className="ghost mini"
-                      onClick={() => void onDownloadHistory(item)}
-                    >
-                      {jobNeedsZip(item) ? "打包分段" : "下载"}
-                    </button>
+                    {jobNeedsZip(item) ? (
+                      <>
+                        <button type="button" className="ghost mini" onClick={() => void onDownloadZip(item)}>
+                          打包分段
+                        </button>
+                        <button type="button" className="ghost mini" onClick={() => void onDownloadFullTrack(item)}>
+                          下载整轨
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" className="ghost mini" onClick={() => void onDownloadFullTrack(item)}>
+                        下载
+                      </button>
+                    )}
                     <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
                       删除
                     </button>

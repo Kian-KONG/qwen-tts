@@ -54,6 +54,8 @@ STABLE_STYLE = os.getenv(
 SILENCE_PAD_MS = int(os.getenv("QWEN_TTS_SILENCE_PAD_MS", "80"))
 ATEMPO_MIN = float(os.getenv("QWEN_TTS_ATEMPO_MIN", "0.88"))
 ATEMPO_MAX = float(os.getenv("QWEN_TTS_ATEMPO_MAX", "1.12"))
+ATEMPO_SHORT_MIN = float(os.getenv("QWEN_TTS_ATEMPO_SHORT_MIN", "0.75"))
+ATEMPO_SHORT_MAX = float(os.getenv("QWEN_TTS_ATEMPO_SHORT_MAX", "1.33"))
 
 LANGUAGES = [
     {"id": "Auto", "label": "自动检测", "lang_code": "auto", "script": "mixed"},

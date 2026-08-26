@@ -28,6 +28,7 @@ class Job:
     speaker: str = ""
     voices: list[dict] = field(default_factory=list)
     stable: bool = True
+    temperature: float = 0.3
 
 
 class JobRunner:
@@ -83,6 +84,7 @@ class JobRunner:
                     speaker=job.speaker,
                     voices=job.voices or None,
                     stable=job.stable,
+                    temperature=job.temperature,
                     progress_cb=on_progress,
                 )
                 job.progress = 1.0

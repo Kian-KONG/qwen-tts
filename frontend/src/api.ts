@@ -296,6 +296,7 @@ export async function createJob(opts: {
   designs?: { id?: string; name: string; instruct: string }[];
   styleInstruct?: string;
   stable?: boolean;
+  temperature?: number;
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
@@ -303,6 +304,7 @@ export async function createJob(opts: {
   body.set("language", opts.language);
   body.set("mode", opts.mode || "preset");
   body.set("stable", opts.stable === false ? "false" : "true");
+  if (opts.temperature != null) body.set("temperature", String(opts.temperature));
   if (opts.instruct) body.set("instruct", opts.instruct);
   if (opts.styleInstruct) body.set("style_instruct", opts.styleInstruct);
   if (opts.speaker) body.set("speaker", opts.speaker);

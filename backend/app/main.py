@@ -35,6 +35,7 @@ from .config import (
     MODEL_ID,
     SPEAKER_BY_ID,
     SPEAKERS,
+    TTS_TEMPERATURE,
 )
 from .asr import asr_engine, asr_runner, public_asr_job
 from .chunking import preview_segments
@@ -115,18 +116,21 @@ def _job_clip_paths(job_id: str) -> list[Path]:
 def _job_full_wav(job_id: str) -> Path:
     folder = OUTPUT_DIR / job_id
     dest = folder / "full.wav"
+    marker = folder / ".full.clips24"
     clips = _job_clip_paths(job_id)
     if len(clips) > 1:
         rebuild = True
-        if dest.exists():
+        if dest.exists() and marker.exists() and audio_util.is_master_wav(dest):
             try:
                 full_dur = audio_util.probe_duration(dest)
                 clip_dur = sum(audio_util.probe_duration(path) for path in clips)
-                rebuild = full_dur < clip_dur * 0.5
+                newest = max(path.stat().st_mtime for path in clips)
+                rebuild = full_dur < clip_dur * 0.5 or marker.stat().st_mtime < newest
             except Exception:
                 rebuild = True
         if rebuild:
             audio_util.concat_wav_files(clips, dest, gap_ms=GAP_MS)
+            marker.touch()
         return dest
     if dest.exists():
         return dest
@@ -389,6 +393,15 @@ def _form_flag(value: Optional[str], default: bool = True) -> bool:
     return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _form_float(value: Optional[str], default: float, lo: float = 0.05, hi: float = 1.5) -> float:
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        return max(lo, min(hi, float(value)))
+    except ValueError:
+        return default
+
+
 class JobRequest(BaseModel):
     text: str
     voice_id: Optional[str] = None
@@ -404,6 +417,7 @@ class JobRequest(BaseModel):
     designs: Optional[str] = None
     style_instruct: Optional[str] = None
     stable: bool = True
+    temperature: float = Field(default=TTS_TEMPERATURE, ge=0.05, le=1.5)
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -643,6 +657,7 @@ async def api_create_job(
     designs: Optional[str] = Form(None),
     style_instruct: Optional[str] = Form(None),
     stable: Optional[str] = Form("true"),
+    temperature: Optional[str] = Form(None),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
@@ -687,6 +702,7 @@ async def api_create_job(
             speaker=speaker_id,
             voices=job_voices,
             stable=_form_flag(stable, True),
+            temperature=_form_float(temperature, TTS_TEMPERATURE),
         )
         return public_job(job)
     except KeyError:
@@ -729,6 +745,7 @@ def api_create_job_json(payload: JobRequest):
         speaker=speaker_id,
         voices=job_voices,
         stable=payload.stable,
+        temperature=payload.temperature,
     )
     return public_job(job)
 
