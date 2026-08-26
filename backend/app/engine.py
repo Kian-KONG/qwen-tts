@@ -28,17 +28,12 @@ from .config import (
     TTS_TEMPERATURE,
     TTS_TOP_P,
 )
+from .modes import parse_mode
+from .paths import is_local_model_dir
 
 
 def normalize_engine_mode(mode: str | None) -> str:
-    value = (mode or "preset").strip().lower()
-    if value in {"design", "voice_design", "describe", "description"}:
-        return "design"
-    if value in {"preset", "custom", "custom_voice"}:
-        return "preset"
-    if value in {"mixed", "all", "multi"}:
-        return "mixed"
-    return "clone"
+    return parse_mode(mode, strict=False)
 
 
 def _voice_kind(item: dict, fallback: str = "preset") -> str:
@@ -60,7 +55,7 @@ class TTSEngine:
         self.lock = threading.Lock()
         self.loaded = False
         self.mode = "preset"
-        self.model_path = str(CUSTOM_MODEL_DIR if _looks_like_model(CUSTOM_MODEL_DIR) else MODEL_ID)
+        self.model_path = str(CUSTOM_MODEL_DIR if is_local_model_dir(CUSTOM_MODEL_DIR) else MODEL_ID)
         self.last_stats: dict = {}
 
     def load(self, mode: str = "preset") -> None:
@@ -90,19 +85,19 @@ class TTSEngine:
         if mode == "mixed":
             mode = "preset"
         if mode == "design":
-            if not _looks_like_model(DESIGN_MODEL_DIR):
+            if not is_local_model_dir(DESIGN_MODEL_DIR):
                 raise FileNotFoundError(
                     "VoiceDesign model is missing. Run: make download-design"
                 )
             path = DESIGN_MODEL_DIR
         elif mode == "preset":
-            if not _looks_like_model(CUSTOM_MODEL_DIR):
+            if not is_local_model_dir(CUSTOM_MODEL_DIR):
                 raise FileNotFoundError(
                     "CustomVoice model is missing. Run: make download-custom"
                 )
             path = CUSTOM_MODEL_DIR
         else:
-            path = MODEL_DIR if _looks_like_model(MODEL_DIR) else MODEL_ID
+            path = MODEL_DIR if is_local_model_dir(MODEL_DIR) else MODEL_ID
         self.model_path = str(path)
         self.model = load_model(self.model_path)
         self.sample_rate = int(getattr(self.model, "sample_rate", 24000))
@@ -462,10 +457,6 @@ def _collect(results, sample_rate: int) -> dict[int, tuple[np.ndarray, int]]:
             int(getattr(result, "sample_rate", sample_rate)),
         )
     return collected
-
-
-def _looks_like_model(path: Path) -> bool:
-    return path.is_dir() and (path / "config.json").exists() and any(path.glob("*.safetensors"))
 
 
 engine = TTSEngine()

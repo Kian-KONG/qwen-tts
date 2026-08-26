@@ -13,24 +13,21 @@ from typing import Any
 from . import audio_util, chunking
 from .config import ASR_MODEL_DIR, ASR_MODEL_ID, LANGUAGE, LANGUAGE_BY_ID
 from .engine import engine
+from .paths import is_local_model_dir
 
 ASR_CHUNK_SEC = 180.0
 ASR_MAX_TOKENS = 16384
-
-
-def _looks_like_model(path: Path) -> bool:
-    return path.is_dir() and (path / "config.json").exists() and any(path.glob("*.safetensors"))
 
 
 class ASREngine:
     def __init__(self) -> None:
         self.model = None
         self.loaded = False
-        self.model_path = str(ASR_MODEL_DIR if _looks_like_model(ASR_MODEL_DIR) else ASR_MODEL_ID)
+        self.model_path = str(ASR_MODEL_DIR if is_local_model_dir(ASR_MODEL_DIR) else ASR_MODEL_ID)
         self.lock = threading.Lock()
 
     def ready(self) -> bool:
-        return _looks_like_model(ASR_MODEL_DIR)
+        return is_local_model_dir(ASR_MODEL_DIR)
 
     def load(self) -> None:
         with engine.lock:
@@ -52,7 +49,7 @@ class ASREngine:
     def _load_unlocked(self) -> None:
         if self.loaded and self.model is not None:
             return
-        if not _looks_like_model(ASR_MODEL_DIR):
+        if not is_local_model_dir(ASR_MODEL_DIR):
             raise FileNotFoundError("Qwen3-ASR model is missing. Run: make download-asr")
         from mlx_audio.stt.utils import load_model
 

@@ -6,41 +6,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .audio_util import probe_duration
+from .audio_util import is_packable_clip, probe_duration
 from .config import OUTPUT_DIR
 
 RECORD_NAME = "job.json"
 
 
 def _clip_wavs(folder: Path) -> list[Path]:
-    clips = []
-    for path in sorted(folder.glob("*.wav")):
-        name = path.name
-        stem = name.lower()
-        if (
-            name.startswith(".")
-            or ".browser." in name
-            or name == "full.wav"
-            or name.startswith("完整轨")
-            or stem.startswith("full.")
-        ):
-            continue
-        clips.append(path)
-    return clips
+    return [path for path in sorted(folder.glob("*.wav")) if is_packable_clip(path.name)]
+
+
+def _strip_urls(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_strip_urls(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_urls(item) for key, item in value.items() if key != "url"}
+    return value
 
 
 def job_dir(job_id: str) -> Path:
     return OUTPUT_DIR / job_id
-
-
-def _title(text: str, segments: list[dict]) -> str:
-    for item in segments:
-        value = str(item.get("text") or "").strip()
-        if value:
-            return value[:48]
-    line = (text or "").strip().split("\n")[0]
-    line = line.lstrip("0123456789.、)）:： ").strip()
-    return line[:48]
 
 
 def persist_job(job: Any) -> None:
@@ -61,7 +46,7 @@ def persist_job(job: Any) -> None:
         "voices": getattr(job, "voices", None) or [],
         "instruct": job.instruct,
         "batch_size": job.batch_size,
-        **(job.stats or {}),
+        **_strip_urls(dict(job.stats or {})),
     }
     (folder / RECORD_NAME).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -119,71 +104,15 @@ def load_record(job_id: str) -> dict:
 
 
 def public_from_record(record: dict) -> dict:
+    from .job_public import public_from_record as serialize_record
+
     job_id = str(record["id"])
     folder = job_dir(job_id)
     full = folder / "full.wav"
-    raw_segments = list(record.get("segments") or [])
-    segments = []
-    for item in raw_segments:
-        try:
-            index = int(item["index"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        segments.append(
-            {
-                "index": index,
-                "text": item.get("text") or "",
-                "voice": item.get("voice"),
-                "filename": item.get("filename"),
-                "duration_sec": item.get("duration_sec"),
-                "url": f"/api/jobs/{job_id}/segments/{index}/audio",
-            }
-        )
-    if not segments:
-        inferred = _infer(folder) if full.exists() else {"segments": []}
-        for item in inferred.get("segments") or []:
-            segments.append(
-                {
-                    "index": item["index"],
-                    "text": "",
-                    "duration_sec": item.get("duration_sec"),
-                    "url": f"/api/jobs/{job_id}/segments/{item['index']}/audio",
-                }
-            )
-    done = full.exists()
-    status = record.get("status") or ("done" if done else "error")
-    return {
-        "id": job_id,
-        "status": status,
-        "progress": 1.0 if done else record.get("progress") or 0,
-        "error": record.get("error"),
-        "created_at": record.get("created_at"),
-        "title": _title(str(record.get("text") or ""), segments),
-        "download_url": f"/api/jobs/{job_id}/audio" if done else None,
-        "zip_url": f"/api/jobs/{job_id}/zip" if done else None,
-        "segments": segments,
-        "tracks": [
-            {
-                "index": item.get("index") or i + 1,
-                "voice": item.get("voice"),
-                "filename": item.get("filename"),
-                "duration_sec": item.get("duration_sec"),
-                "url": f"/api/jobs/{job_id}/tracks/{item.get('index') or i + 1}/audio",
-            }
-            for i, item in enumerate(record.get("tracks") or [])
-        ],
-        "speakers": record.get("speakers"),
-        "chunks": record.get("chunks") or len(segments) or 1,
-        "language": record.get("language") or None,
-        "mode": record.get("mode") or None,
-        "speaker": record.get("speaker"),
-        "batch_size": record.get("batch_size"),
-        "elapsed_sec": record.get("elapsed_sec"),
-        "audio_sec": record.get("audio_sec"),
-        "rtf": record.get("rtf"),
-        "text": record.get("text") or "",
-        "local_dir": f"data/output/{job_id}",
-    }
+    inferred = None
+    if not record.get("segments") and full.exists():
+        inferred = _infer(folder).get("segments")
+    return serialize_record(record, full_exists=full.exists(), inferred_segments=inferred)
 
 
 def list_disk_jobs() -> list[dict]:

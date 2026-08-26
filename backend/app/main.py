@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import io
-import json
 import tempfile
-import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -26,10 +23,8 @@ from .config import (
     DESIGN_MODEL_DIR,
     DESIGN_MODEL_ID,
     FRONTEND_DIST,
-    GAP_MS,
     LANGUAGE,
     LANGUAGES,
-    OUTPUT_DIR,
     LANGUAGE_BY_ID,
     MODEL_DIR,
     MODEL_ID,
@@ -40,9 +35,13 @@ from .config import (
 from .asr import asr_engine, asr_runner, public_asr_job
 from .chunking import preview_segments
 from .engine import engine
-from .history import delete_record, list_disk_jobs, load_record, public_from_record
+from .job_assets import full_wav, segment_wav, track_wav, zip_bytes
+from .job_repo import JobBusy, delete_job, get_public, item_list, list_public
 from .jobs import public_job, runner
+from .modes import parse_mode
+from .paths import is_local_model_dir
 from .script_import import import_spreadsheet
+from .voice_assembly import assemble_job_voices
 
 
 def _check_key(authorization: Optional[str]) -> None:
@@ -69,110 +68,6 @@ def _wav_response(path: Path, filename: str, download: bool) -> FileResponse:
         filename=filename,
         content_disposition_type="inline",
     )
-
-
-def _skip_zip_name(name: str) -> bool:
-    stem = name.lower()
-    return (
-        name.startswith(".")
-        or ".browser." in name
-        or name == "full.wav"
-        or name.startswith("完整轨")
-        or stem.startswith("full.")
-    )
-
-
-def _job_clip_paths(job_id: str) -> list[Path]:
-    folder = OUTPUT_DIR / job_id
-    clips: list[Path] = []
-    seen: set[str] = set()
-    first_voice: str | None = None
-    for item in _job_item_list(job_id, "segments"):
-        path = Path(item.get("path") or "")
-        if not path.exists():
-            name = str(item.get("filename") or "")
-            if name:
-                path = folder / name
-        if not path.exists() or _skip_zip_name(path.name):
-            continue
-        voice = str(item.get("voice_id") or item.get("voice") or "")
-        if first_voice is None:
-            first_voice = voice
-        elif voice and first_voice and voice != first_voice:
-            continue
-        key = str(path.resolve())
-        if key in seen:
-            continue
-        seen.add(key)
-        clips.append(path)
-    if not clips and folder.is_dir():
-        for path in sorted(folder.glob("*.wav")):
-            if _skip_zip_name(path.name):
-                continue
-            clips.append(path)
-    return clips
-
-
-def _job_full_wav(job_id: str) -> Path:
-    folder = OUTPUT_DIR / job_id
-    dest = folder / "full.wav"
-    marker = folder / ".full.clips24"
-    clips = _job_clip_paths(job_id)
-    if len(clips) > 1:
-        rebuild = True
-        if dest.exists() and marker.exists() and audio_util.is_master_wav(dest):
-            try:
-                full_dur = audio_util.probe_duration(dest)
-                clip_dur = sum(audio_util.probe_duration(path) for path in clips)
-                newest = max(path.stat().st_mtime for path in clips)
-                rebuild = full_dur < clip_dur * 0.5 or marker.stat().st_mtime < newest
-            except Exception:
-                rebuild = True
-        if rebuild:
-            audio_util.concat_wav_files(clips, dest, gap_ms=GAP_MS)
-            marker.touch()
-        return dest
-    if dest.exists():
-        return dest
-    if clips:
-        return clips[0]
-    raise HTTPException(status_code=404, detail="Job not found")
-
-
-def _job_item_list(job_id: str, key: str) -> list[dict]:
-    try:
-        job = runner.get(job_id)
-        if job.status == "done":
-            return list(job.stats.get(key) or [])
-    except KeyError:
-        pass
-    try:
-        return list(load_record(job_id).get(key) or [])
-    except KeyError:
-        return []
-
-
-def _job_segment_wav(job_id: str, index: int) -> tuple[Path, str]:
-    for item in _job_item_list(job_id, "segments"):
-        if int(item.get("index") or 0) != index:
-            continue
-        path = Path(item.get("path") or "")
-        if path.exists():
-            return path, str(item.get("filename") or path.name)
-    path = OUTPUT_DIR / job_id / f"seg_{index:03d}.wav"
-    if path.exists():
-        return path, path.name
-    raise HTTPException(status_code=404, detail="Segment not found")
-
-
-def _job_track_wav(job_id: str, index: int) -> tuple[Path, str]:
-    for item in _job_item_list(job_id, "tracks"):
-        if int(item.get("index") or 0) != index:
-            continue
-        path = Path(item.get("path") or "")
-        if path.exists():
-            return path, str(item.get("filename") or path.name)
-    raise HTTPException(status_code=404, detail="Track not found")
 
 
 @asynccontextmanager
@@ -219,16 +114,10 @@ class VoiceRenameRequest(BaseModel):
 
 
 def _normalize_mode(mode: str | None) -> str:
-    value = (mode or "preset").strip().lower()
-    if value in {"design", "voice_design", "describe", "description"}:
-        return "design"
-    if value in {"preset", "custom", "custom_voice"}:
-        return "preset"
-    if value in {"mixed", "all", "multi"}:
-        return "mixed"
-    if value in {"clone", "base", "icl"}:
-        return "clone"
-    raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
+    try:
+        return parse_mode(mode, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _normalize_speaker(speaker: str | None) -> str:
@@ -236,72 +125,6 @@ def _normalize_speaker(speaker: str | None) -> str:
     if value not in SPEAKER_BY_ID:
         raise HTTPException(status_code=400, detail=f"Unknown speaker: {speaker}")
     return value
-
-
-def _parse_id_list(*values: Optional[str]) -> list[str]:
-    seen: list[str] = []
-    for value in values:
-        if not value:
-            continue
-        for item in str(value).replace(";", ",").split(","):
-            token = item.strip()
-            if token and token not in seen:
-                seen.append(token)
-    return seen
-
-
-def _preset_voices(ids: list[str]) -> list[dict]:
-    voices = []
-    for speaker_id in ids:
-        if speaker_id not in SPEAKER_BY_ID:
-            raise HTTPException(status_code=400, detail=f"Unknown speaker: {speaker_id}")
-        voices.append({"id": speaker_id, "name": SPEAKER_BY_ID[speaker_id]["label"], "kind": "preset"})
-    return voices
-
-
-def _design_voices(raw: Optional[str], instruct: Optional[str]) -> list[dict]:
-    items: list[dict] = []
-    parsed = []
-    if raw and raw.strip():
-        try:
-            loaded = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid designs JSON: {exc}") from exc
-        parsed = loaded if isinstance(loaded, list) else [loaded]
-    for index, item in enumerate(parsed):
-        if not isinstance(item, dict):
-            continue
-        prompt = str(item.get("instruct") or item.get("text") or "").strip()
-        if not prompt:
-            continue
-        name = str(item.get("name") or "").strip() or f"描述音色 {index + 1}"
-        items.append({"id": str(item.get("id") or f"design-{index + 1}"), "name": name, "kind": "design", "instruct": prompt})
-    if not items and (instruct or "").strip():
-        items.append({"id": "design", "name": "描述音色", "kind": "design", "instruct": instruct.strip()})
-    return items
-
-
-def _clone_voices(ids: list[str], ref_audio: str = "", ref_text: str = "") -> list[dict]:
-    if ids:
-        result = []
-        for voice_id in ids:
-            profile = voices.get_voice(voice_id)
-            result.append(
-                {
-                    "id": profile["id"],
-                    "name": profile.get("name") or profile["id"],
-                    "kind": "clone",
-                    "ref_audio": profile["ref_audio"],
-                    "ref_text": profile["ref_text"],
-                }
-            )
-        return result
-    if ref_audio and ref_text:
-        return [{"id": "clone", "name": "克隆", "kind": "clone", "ref_audio": ref_audio, "ref_text": ref_text}]
-    raise HTTPException(
-        status_code=400,
-        detail="Select a saved clone voice or upload reference audio",
-    )
 
 
 def _assemble_job_voices(
@@ -317,55 +140,21 @@ def _assemble_job_voices(
     ref_audio: str = "",
     ref_text: str = "",
 ) -> tuple[str, list[dict], str, str, str, str]:
-    preset_ids = _parse_id_list(speakers, speaker)
-    clone_ids = _parse_id_list(voice_ids)
-    if voice_id:
-        if voice_id in SPEAKER_BY_ID and mode == "preset" and voice_id not in preset_ids:
-            preset_ids.append(voice_id)
-        elif voice_id not in SPEAKER_BY_ID and voice_id not in clone_ids:
-            clone_ids.append(voice_id)
-
-    style = (style_instruct or "").strip()
-    if mode == "preset" and not style:
-        style = (instruct or "").strip()
-
-    job_voices: list[dict] = []
-    for item in _preset_voices(preset_ids):
-        if style:
-            item["style"] = style
-        job_voices.append(item)
-    if mode == "design":
-        job_voices.extend(_design_voices(designs, instruct))
-    elif mode == "mixed":
-        job_voices.extend(_design_voices(designs if designs is not None else None, None))
-    else:
-        job_voices.extend(_design_voices(designs, None))
-
-    audio_path, transcript = "", ""
-    if clone_ids or ref_audio:
-        clones = _clone_voices(clone_ids, ref_audio, ref_text)
-        job_voices.extend(clones)
-        audio_path = str(clones[0]["ref_audio"])
-        transcript = str(clones[0]["ref_text"])
-
-    if not job_voices:
-        if mode == "design":
-            raise HTTPException(status_code=400, detail="instruct is required for described voices")
-        if mode == "clone":
-            raise HTTPException(
-                status_code=400,
-                detail="Select a saved clone voice or upload reference audio",
-            )
-        job_voices = _preset_voices([DEFAULT_SPEAKER])
-
-    kinds = list(dict.fromkeys(str(item.get("kind")) for item in job_voices))
-    job_mode = kinds[0] if len(kinds) == 1 else "mixed"
-    speaker_id = next((str(item["id"]) for item in job_voices if item.get("kind") == "preset"), "")
-    description = next(
-        (str(item.get("instruct") or "") for item in job_voices if item.get("kind") == "design"),
-        (instruct or style or ""),
-    )
-    return job_mode, job_voices, speaker_id, audio_path, transcript, description
+    try:
+        return assemble_job_voices(
+            mode,
+            speakers=speakers,
+            speaker=speaker,
+            voice_id=voice_id,
+            voice_ids=voice_ids,
+            designs=designs,
+            instruct=instruct,
+            style_instruct=style_instruct,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _current_model_id() -> str:
@@ -374,10 +163,6 @@ def _current_model_id() -> str:
     if engine.mode == "preset":
         return CUSTOM_MODEL_ID
     return MODEL_ID
-
-
-def _looks_like_model(path: Path) -> bool:
-    return path.is_dir() and (path / "config.json").exists() and any(path.glob("*.safetensors"))
 
 
 def _normalize_language(language: str | None) -> str:
@@ -445,14 +230,14 @@ def health():
         "model_id": _current_model_id(),
         "model_path": engine.model_path,
         "model_loaded": engine.loaded,
-        "model_dir_ready": _looks_like_model(MODEL_DIR),
+        "model_dir_ready": is_local_model_dir(MODEL_DIR),
         "design_model_id": DESIGN_MODEL_ID,
-        "design_model_ready": _looks_like_model(DESIGN_MODEL_DIR),
+        "design_model_ready": is_local_model_dir(DESIGN_MODEL_DIR),
         "custom_model_id": CUSTOM_MODEL_ID,
-        "custom_model_ready": _looks_like_model(CUSTOM_MODEL_DIR),
+        "custom_model_ready": is_local_model_dir(CUSTOM_MODEL_DIR),
         "asr_model_id": ASR_MODEL_ID,
         "asr_model_path": asr_engine.model_path,
-        "asr_model_ready": _looks_like_model(ASR_MODEL_DIR),
+        "asr_model_ready": is_local_model_dir(ASR_MODEL_DIR),
         "asr_loaded": asr_engine.loaded,
         "current_mode": engine.mode,
         "default_speaker": DEFAULT_SPEAKER,
@@ -752,28 +537,13 @@ def api_create_job_json(payload: JobRequest):
 
 @app.get("/api/jobs")
 def api_list_jobs():
-    seen: set[str] = set()
-    items = []
-    for job in list(runner.jobs.values()):
-        items.append(public_job(job))
-        seen.add(job.id)
-    for item in list_disk_jobs():
-        if item["id"] in seen:
-            continue
-        items.append(item)
-        seen.add(item["id"])
-    items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
-    return {"data": items}
+    return {"data": list_public()}
 
 
 @app.get("/api/jobs/{job_id}")
 def api_get_job(job_id: str):
     try:
-        return public_job(runner.get(job_id))
-    except KeyError:
-        pass
-    try:
-        return public_from_record(load_record(job_id))
+        return get_public(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -781,54 +551,45 @@ def api_get_job(job_id: str):
 @app.delete("/api/jobs/{job_id}")
 def api_delete_job(job_id: str):
     try:
-        job = runner.get(job_id)
-        if job.status in {"queued", "running"}:
-            raise HTTPException(status_code=409, detail="任务还在生成，不能删除")
-        runner.forget(job_id)
-    except KeyError:
-        pass
-    delete_record(job_id)
+        delete_job(job_id)
+    except JobBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True}
 
 
 @app.get("/api/jobs/{job_id}/audio")
 def api_job_audio(job_id: str, download: bool = False):
-    return _wav_response(_job_full_wav(job_id), f"{job_id}.wav", download)
+    try:
+        path = full_wav(job_id, item_list(job_id, "segments"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _wav_response(path, f"{job_id}.wav", download)
 
 
 @app.get("/api/jobs/{job_id}/segments/{index}/audio")
 def api_job_segment_audio(job_id: str, index: int, download: bool = False):
-    path, filename = _job_segment_wav(job_id, index)
+    try:
+        path, filename = segment_wav(job_id, index, item_list(job_id, "segments"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Segment not found")
     return _wav_response(path, filename, download)
 
 
 @app.get("/api/jobs/{job_id}/tracks/{index}/audio")
 def api_job_track_audio(job_id: str, index: int, download: bool = False):
-    path, filename = _job_track_wav(job_id, index)
+    try:
+        path, filename = track_wav(job_id, index, item_list(job_id, "tracks"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Track not found")
     return _wav_response(path, filename, download)
 
 
 @app.get("/api/jobs/{job_id}/zip")
 def api_job_zip(job_id: str):
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        added: set[str] = set()
-        for item in _job_item_list(job_id, "segments"):
-            path = Path(item.get("path") or "")
-            name = str(item.get("filename") or path.name)
-            if path.exists() and name not in added and not _skip_zip_name(name):
-                archive.write(path, name)
-                added.add(name)
-        folder = OUTPUT_DIR / job_id
-        if folder.is_dir():
-            for path in sorted(folder.glob("*.wav")):
-                if _skip_zip_name(path.name) or path.name in added:
-                    continue
-                archive.write(path, path.name)
-                added.add(path.name)
-        if not added:
-            raise HTTPException(status_code=404, detail="No clip files to pack")
-    body = buffer.getvalue()
+    try:
+        body = zip_bytes(job_id, item_list(job_id, "segments"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No clip files to pack")
     return Response(
         body,
         media_type="application/zip",

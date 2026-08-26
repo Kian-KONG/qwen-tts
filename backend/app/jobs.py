@@ -102,52 +102,6 @@ runner = JobRunner()
 
 
 def public_job(job: Job) -> dict:
-    stats = dict(job.stats)
-    raw_segments = stats.pop("segments", []) or []
-    raw_tracks = stats.pop("tracks", []) or []
-    segments = [
-        {
-            "index": item["index"],
-            "text": item["text"],
-            "voice": item.get("voice"),
-            "filename": item.get("filename"),
-            "duration_sec": item.get("duration_sec"),
-            "url": f"/api/jobs/{job.id}/segments/{item['index']}/audio",
-        }
-        for item in raw_segments
-    ]
-    tracks = [
-        {
-            "index": item.get("index") or i + 1,
-            "voice": item.get("voice"),
-            "filename": item.get("filename"),
-            "duration_sec": item.get("duration_sec"),
-            "url": f"/api/jobs/{job.id}/tracks/{item.get('index') or i + 1}/audio",
-        }
-        for i, item in enumerate(raw_tracks)
-    ]
-    download = f"/api/jobs/{job.id}/audio" if job.status == "done" else None
-    zip_url = f"/api/jobs/{job.id}/zip" if job.status == "done" and segments else None
-    title = next((item["text"].strip()[:48] for item in segments if (item.get("text") or "").strip()), "")
-    if not title:
-        line = (job.text or "").strip().split("\n")[0]
-        title = line.lstrip("0123456789.、)）:： ").strip()[:48]
-    speakers = stats.get("speakers") or [
-        str(item.get("name") or item.get("id") or "") for item in (job.voices or [])
-    ]
-    speakers = [name for name in speakers if name]
-    return {
-        "id": job.id,
-        "status": job.status,
-        "progress": job.progress,
-        "error": job.error,
-        "created_at": job.created_at,
-        "title": title,
-        "download_url": download,
-        "zip_url": zip_url,
-        "local_dir": f"data/output/{job.id}" if job.status == "done" else None,
-        **stats,
-        "segments": segments,
-        "tracks": tracks,
-        "speakers": speakers or None,
-    }
+    from .job_public import public_from_job
+
+    return public_from_job(job)

@@ -1,7 +1,6 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   API_BASE,
-  apiUrl,
   createJob,
   createTranscribeJob,
   createVoice,
@@ -22,12 +21,19 @@ import {
   withDownload,
   type Health,
   type Job,
-  type JobSegment,
   type Language,
   type Speaker,
   type Transcript,
   type Voice,
 } from "./api";
+import { FileField } from "./components/FileField";
+import { TempSlider } from "./components/TempSlider";
+import { TranscribePanel } from "./components/TranscribePanel";
+import { AppSidebar } from "./components/AppSidebar";
+import { AudioRow } from "./components/AudioRow";
+import { ClipList } from "./components/ClipList";
+import { FoldSection } from "./components/FoldSection";
+import { jobNeedsZip, jobFullTrackUrl, jobZipUrl, wavName } from "./lib/jobUtils";
 import { useHashRoute } from "./route";
 
 const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
@@ -110,20 +116,14 @@ function toMarkdown(items: string[]): string {
     .join("\n");
 }
 
-const ASR_STAGES: Record<string, string> = {
-  queued: "排队中",
-  converting: "转换音频",
-  loading: "加载转写模型",
-  transcribing: "识别中",
-  done: "完成",
-  error: "失败",
-};
-
 const VOICE_ID_KEY = "qwen-tts-voice-id";
 const VOICE_IDS_KEY = "qwen-tts-voice-ids";
 const SPEAKERS_KEY = "qwen-tts-speakers";
 const DESIGNS_KEY = "qwen-tts-designs";
 const JOB_ID_KEY = "qwen-tts-job-id";
+const SIDEBAR_KEY = "qwen-tts-sidebar";
+const VOICE_FOLD_KEY = "qwen-tts-voice-fold";
+const HISTORY_FOLD_KEY = "qwen-tts-history-fold";
 
 const MODE_LABEL: Record<string, string> = {
   preset: "预设",
@@ -133,6 +133,12 @@ const MODE_LABEL: Record<string, string> = {
 };
 
 type DesignPick = { id: string; name: string; instruct: string };
+type VoiceFold = "preset" | "design" | "clone";
+
+function storedVoiceFold(): VoiceFold {
+  const value = stored(VOICE_FOLD_KEY, "preset");
+  return value === "design" || value === "clone" ? value : "preset";
+}
 
 function stored(key: string, fallback: string): string {
   try {
@@ -161,67 +167,6 @@ function toggleId(current: string[], id: string, keepLast = false): string[] {
   return [...current, id];
 }
 
-function clipLabel(segment: { text?: string | null; voice?: string | null; filename?: string | null }): string {
-  if (segment.filename) return segment.filename.replace(/\.wav$/i, "");
-  const text = (segment.text || "片段").trim() || "片段";
-  const voice = (segment.voice || "音色").trim() || "音色";
-  return `${text} - ${voice}`;
-}
-
-function wavName(label: string): string {
-  return label.toLowerCase().endsWith(".wav") ? label : `${label}.wav`;
-}
-
-function groupSegments(segments: JobSegment[]): { text: string; clips: JobSegment[] }[] {
-  const groups: { text: string; clips: JobSegment[] }[] = [];
-  const index = new Map<string, { text: string; clips: JobSegment[] }>();
-  for (const segment of segments) {
-    const key = segment.text || `\0${segment.index}`;
-    let group = index.get(key);
-    if (!group) {
-      group = { text: segment.text || "", clips: [] };
-      index.set(key, group);
-      groups.push(group);
-    }
-    group.clips.push(segment);
-  }
-  return groups;
-}
-
-function jobVoiceCount(job: Job): number {
-  const fromTracks = job.tracks?.length || 0;
-  const fromSpeakers = job.speakers?.length || 0;
-  const fromClips = new Set((job.segments || []).map((item) => item.voice).filter(Boolean)).size;
-  return Math.max(fromTracks, fromSpeakers, fromClips);
-}
-
-function jobClipCount(job: Job): number {
-  return Math.max(job.segments?.length || 0, job.chunks || 0);
-}
-
-function jobNeedsZip(job: Job): boolean {
-  return jobClipCount(job) > 1 || jobVoiceCount(job) > 1;
-}
-
-function TempSlider({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  return (
-    <label className="temp-control">
-      温度 temp
-      <div className="temp-row">
-        <input
-          type="range"
-          min={0.1}
-          max={1}
-          step={0.05}
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-        />
-        <span>{value.toFixed(2)}</span>
-      </div>
-    </label>
-  );
-}
-
 function storedJson<T>(key: string, fallback: T): T {
   try {
     const raw = window.localStorage.getItem(key);
@@ -232,42 +177,13 @@ function storedJson<T>(key: string, fallback: T): T {
   }
 }
 
-function FileField({
-  label,
-  accept,
-  file,
-  emptyText = "未选择文件",
-  buttonText,
-  onChange,
-}: {
-  label: string;
-  accept: string;
-  file?: File | null;
-  emptyText?: string;
-  buttonText?: string;
-  onChange: (file: File | null) => void;
-}) {
-  return (
-    <label className="file-field-wrap">
-      {label}
-      <span className="file-field">
-        <span className="file-name">{file ? file.name : emptyText}</span>
-        <span className="file-btn">{buttonText || (file ? "更换文件" : "选择文件")}</span>
-        <input
-          type="file"
-          accept={accept}
-          onChange={(event) => {
-            onChange(event.target.files?.[0] ?? null);
-            event.target.value = "";
-          }}
-        />
-      </span>
-    </label>
-  );
-}
-
 export default function App() {
   const [route, go] = useHashRoute();
+  const [railCollapsed, setRailCollapsed] = useState(() => stored(SIDEBAR_KEY, "0") === "1");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [voiceFold, setVoiceFold] = useState<VoiceFold>(storedVoiceFold);
+  const [cloneStudioOpen, setCloneStudioOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(() => stored(HISTORY_FOLD_KEY, "1") !== "0");
   const [health, setHealth] = useState<Health | null>(null);
   const [languages, setLanguages] = useState<Language[]>([]);
   const [language, setLanguage] = useState("Auto");
@@ -426,10 +342,13 @@ export default function App() {
       window.localStorage.setItem(SPEAKERS_KEY, selectedSpeakers.join(","));
       window.localStorage.setItem(VOICE_IDS_KEY, selectedVoiceIds.join(","));
       window.localStorage.setItem(DESIGNS_KEY, JSON.stringify(designs));
+      window.localStorage.setItem(SIDEBAR_KEY, railCollapsed ? "1" : "0");
+      window.localStorage.setItem(VOICE_FOLD_KEY, voiceFold);
+      window.localStorage.setItem(HISTORY_FOLD_KEY, historyOpen ? "1" : "0");
     } catch {
       /* ignore quota / private mode */
     }
-  }, [voiceId, selectedSpeakers, selectedVoiceIds, designs]);
+  }, [voiceId, selectedSpeakers, selectedVoiceIds, designs, railCollapsed, voiceFold, historyOpen]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error") return;
@@ -670,6 +589,8 @@ export default function App() {
       await refresh();
       setVoiceId(voice.id);
       setSelectedVoiceIds((current) => (current.includes(voice.id) ? current : [...current, voice.id]));
+      setCloneStudioOpen(false);
+      setVoiceFold("clone");
       setMessage(`已保存音色 ${voice.name}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败");
@@ -709,6 +630,7 @@ export default function App() {
         ? asrJob.segments.map((item) => `${item.index}. ${item.text}`).join("\n")
         : toMarkdown(parseMarkdownList(asrText));
     setMarkdown(next);
+    setDrawerOpen(false);
     go("dub");
     setMessage("已填入配音文稿");
   }
@@ -716,6 +638,9 @@ export default function App() {
   function applyAsrToClone() {
     if (!asrText.trim()) return;
     setRefText(asrText.trim());
+    setCloneStudioOpen(true);
+    setVoiceFold("clone");
+    setDrawerOpen(false);
     go("dub");
     setMessage("已填入克隆逐字稿");
   }
@@ -893,8 +818,7 @@ export default function App() {
   }
 
   function onDownloadZip(item: Job) {
-    const zip = item.zip_url || apiUrl(`/api/jobs/${item.id}/zip`);
-    void onDownload(zip, `${item.id}.zip`);
+    void onDownload(jobZipUrl(item), `${item.id}.zip`);
   }
 
   function onDownloadFullTrack(item: Job) {
@@ -903,10 +827,7 @@ export default function App() {
       void onDownload(withDownload(segment.url), wavName(segment.filename || item.title || item.id));
       return;
     }
-    void onDownload(
-      withDownload(item.download_url || apiUrl(`/api/jobs/${item.id}/audio`)),
-      `${item.id}.wav`,
-    );
+    void onDownload(jobFullTrackUrl(item), `${item.id}.wav`);
   }
 
   async function openHistory(id: string) {
@@ -940,150 +861,209 @@ export default function App() {
     return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
-  const zipUrl = job?.status === "done" ? job.zip_url || "" : "";
+  function historyHint(item: Job) {
+    return [
+      formatWhen(item.created_at),
+      item.mode ? MODE_LABEL[item.mode] || item.mode : "",
+      item.speakers?.length ? item.speakers.join(" / ") : item.speaker || "",
+      item.audio_sec ? `${item.audio_sec}s` : "",
+      item.chunks && item.speakers && item.speakers.length > 1
+        ? `${item.chunks} 段 × ${item.speakers.length} 音色`
+        : item.segments?.length
+          ? `${item.segments.length} 段`
+          : item.chunks
+            ? `${item.chunks} 段`
+            : "",
+      item.status !== "done" ? item.status : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  function goRoute(next: typeof route) {
+    go(next);
+    setDrawerOpen(false);
+  }
+
+  const appClass = `app${railCollapsed ? " rail-collapsed" : ""}${drawerOpen ? " drawer-open" : ""}`;
+  const modelName =
+    route === "transcribe"
+      ? health?.asr_model_id?.split("/").pop() || "Qwen3-ASR"
+      : (
+          health?.current_mode === "design"
+            ? health?.design_model_id
+            : health?.current_mode === "preset"
+              ? health?.custom_model_id
+              : health?.model_id
+        )?.split("/").pop() || "等待模型";
+  const modelDetail =
+    route === "transcribe"
+      ? health?.asr_loaded
+        ? "转写已加载"
+        : health?.asr_model_ready
+          ? "转写就绪"
+          : "转写未下载"
+      : `${health?.model_loaded ? "已加载" : "未加载"}${health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}${health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}`;
 
   return (
-    <div className="page">
-      <header className="top">
-        <div>
-          <p className="kicker">Multilingual Dubbing</p>
-          <h1>Qwen3-TTS 配音台</h1>
-          <nav className="nav">
-            <button type="button" className={route === "dub" ? "active" : "ghost"} onClick={() => go("dub")}>
-              配音
-            </button>
-            <button type="button" className={route === "transcribe" ? "active" : "ghost"} onClick={() => go("transcribe")}>
-              转写
-            </button>
-          </nav>
-        </div>
-        <div className="status">
-          <span className={health?.model_loaded || health?.model_dir_ready ? "dot on" : "dot"} />
-          <div>
-            <strong>
-              {route === "transcribe"
-                ? health?.asr_model_id?.split("/").pop() || "Qwen3-ASR"
-                : (
-                    health?.current_mode === "design"
-                      ? health?.design_model_id
-                      : health?.current_mode === "preset"
-                        ? health?.custom_model_id
-                        : health?.model_id
-                  )?.split("/").pop() || "等待模型"}
-            </strong>
-            <p>
-              {route === "transcribe"
-                ? health?.asr_loaded
-                  ? "转写已加载"
-                  : health?.asr_model_ready
-                    ? "转写就绪"
-                    : "转写未下载"
-                : `${health?.model_loaded ? "已加载" : "未加载"}${health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}${health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}`}
-            </p>
-          </div>
-        </div>
-      </header>
-      {message ? <p className="flash">{message}</p> : null}
-
-      {route === "transcribe" ? (
-      <section className="panel asr-panel">
-        <div className="asr-head">
-          <div>
-            <h2>语音转文字</h2>
-            <p className="hint">
-              上传音频后会显示进度；第一次会先卸载 TTS、加载 Qwen3-ASR 1.7B。转写完成后可填入配音页。
-              {health?.asr_model_ready ? "" : " 当前还没下载 ASR 权重，请先运行 `make download-asr`。"}
-            </p>
-          </div>
-          <p className="hint">
-            {health?.asr_loaded ? "转写模型已加载" : health?.asr_model_ready ? "转写模型就绪，未加载" : "转写未下载"}
-          </p>
-        </div>
-        <div className="stack">
-          <div className="row">
-            <div className="grow">
-              <FileField
-                label="音频"
-                accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
-                file={asrFile}
-                emptyText="wav / m4a / mp3"
-                onChange={setAsrFile}
-              />
-            </div>
-            <label>
-              语言
-              <select value={asrLanguage} onChange={(e) => setAsrLanguage(e.target.value)}>
-                {languages.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+    <div className={appClass}>
+      {drawerOpen ? <button type="button" className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setDrawerOpen(false)} /> : null}
+      <AppSidebar
+        route={route}
+        collapsed={railCollapsed}
+        onGo={goRoute}
+        onToggle={() => setRailCollapsed((open) => !open)}
+      />
+      <div className="workspace">
+        <header className="app-bar">
           <button
             type="button"
-            onClick={() => void onTranscribe()}
-            disabled={!asrFile || health?.asr_model_ready === false || (asrJob?.status === "queued" || asrJob?.status === "running")}
+            className="menu-btn"
+            aria-label="打开菜单"
+            onClick={() => setDrawerOpen(true)}
           >
-            {asrJob?.status === "queued" || asrJob?.status === "running" ? "转写中…" : "开始转写"}
+            <span />
+            <span />
+            <span />
           </button>
-          {asrJob ? (
-            <div className="job">
-              <div className="bar">
-                <span style={{ width: `${Math.round((asrJob.progress || 0) * 100)}%` }} />
-              </div>
-              <p>
-                {asrJob.status === "done"
-                  ? `完成 · ${asrJob.segments?.length || 1} 段 · ${asrJob.duration_sec ?? "-"}s · 耗时 ${asrJob.elapsed_sec ?? "-"}s · ${asrJob.language || asrLanguage}`
-                  : asrJob.status === "error"
-                    ? asrJob.error
-                    : asrJob.chunk && asrJob.chunks
-                      ? `识别中 ${asrJob.chunk}/${asrJob.chunks} · ${Math.round((asrJob.progress || 0) * 100)}%`
-                      : `${ASR_STAGES[asrJob.stage || asrJob.status || ""] || asrJob.stage || asrJob.status} · ${Math.round((asrJob.progress || 0) * 100)}%`}
-              </p>
-            </div>
-          ) : null}
-          <label>
-            转写结果
-            <textarea
-              rows={16}
-              className="asr-result"
-              value={asrText}
-              onChange={(e) => setAsrText(e.target.value)}
-              placeholder="识别结果会出现在这里，可再编辑。"
-            />
-          </label>
-          <div className="row">
-            <button type="button" className="ghost" onClick={() => void copyAsrText()} disabled={!asrText.trim()}>
-              {asrCopied ? "已复制" : "复制结果"}
-            </button>
-            <button type="button" className="ghost" onClick={applyAsrToScript} disabled={!asrText.trim()}>
-              填入配音文稿
-            </button>
-            <button type="button" className="ghost" onClick={applyAsrToClone} disabled={!asrText.trim()}>
-              填入克隆逐字稿
-            </button>
+          <div className="app-bar-title">
+            <strong>{route === "transcribe" ? "转写" : "配音"}</strong>
+            <span>{route === "transcribe" ? "语音转文字，结果可填回配音页" : "音色、文稿、成片并排工作"}</span>
           </div>
-        </div>
-      </section>
+          <div className="status">
+            <span className={health?.model_loaded || health?.model_dir_ready ? "dot on" : "dot"} />
+            <div>
+              <strong>{modelName}</strong>
+              <p>{modelDetail}</p>
+            </div>
+          </div>
+        </header>
+        {message ? <p className="flash">{message}</p> : null}
+
+      {route === "transcribe" ? (
+      <TranscribePanel
+        health={health}
+        languages={languages}
+        asrFile={asrFile}
+        asrLanguage={asrLanguage}
+        asrJob={asrJob}
+        asrText={asrText}
+        asrCopied={asrCopied}
+        onFile={setAsrFile}
+        onLanguage={setAsrLanguage}
+        onTranscribe={() => void onTranscribe()}
+        onTextChange={setAsrText}
+        onCopy={() => void copyAsrText()}
+        onApplyToScript={applyAsrToScript}
+        onApplyToClone={applyAsrToClone}
+      />
       ) : (
-      <>
-      <main className="grid">
-        <section className="panel">
-          <h2>1. 音色</h2>
+      <div className="studio">
+      <section className="panel studio-voices">
+        <header className="panel-head">
+          <h2>音色</h2>
+          <span>{voiceCount} 个已选</span>
+        </header>
           <audio
             ref={voicePlayerRef}
             className="voice-player"
             onEnded={() => setPlayingVoiceId(null)}
           />
+          {cloneStudioOpen ? (
+            <div className="subpanel">
+              <header className="subpanel-head">
+                <h3>录制克隆</h3>
+                <button
+                  type="button"
+                  className="ghost mini"
+                  disabled={recStatus === "recording"}
+                  onClick={() => setCloneStudioOpen(false)}
+                >
+                  返回选音色
+                </button>
+              </header>
+              <p className="hint">对着麦克风朗读下面这句，3–10 秒干净人声。保存后会留在本机 `data/voices/`。</p>
+              <form className="stack" onSubmit={onSaveVoice}>
+                <label>
+                  音色名称
+                  <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
+                </label>
+                <div className="rec-script">
+                  <span>请朗读</span>
+                  {CLONE_PROMPT}
+                </div>
+                <div className="rec-bar">
+                  {recStatus === "recording" ? (
+                    <button type="button" className="rec-stop" onClick={stopMic}>
+                      停止
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => void startMic()} disabled={busy}>
+                      开始录音
+                    </button>
+                  )}
+                  <span className={recStatus === "recording" ? "rec-live" : "hint"}>
+                    {recStatus === "recording"
+                      ? `录音中 ${recSeconds.toFixed(1)}s / ${REC_MAX_SEC}s`
+                      : recStatus === "ready"
+                        ? `已录 ${recSeconds.toFixed(1)}s`
+                        : "建议 5–8 秒，最长 10 秒"}
+                  </span>
+                  {recStatus === "ready" ? (
+                    <button
+                      type="button"
+                      className="ghost mini"
+                      onClick={() => {
+                        clearMicTake();
+                        setRefFile(null);
+                      }}
+                    >
+                      重录
+                    </button>
+                  ) : null}
+                </div>
+                {recUrl ? <audio className="rec-player" controls src={recUrl} /> : null}
+                <FileField
+                  label="或上传参考音频"
+                  accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
+                  file={refFile}
+                  emptyText="wav / m4a / mp3 / 麦克风录音，3–10 秒"
+                  onChange={(file) => {
+                    if (file) clearMicTake();
+                    setRefFile(file);
+                  }}
+                />
+                <label>
+                  朗读稿（需和录音一致）
+                  <textarea
+                    rows={3}
+                    value={refText}
+                    onChange={(e) => setRefText(e.target.value)}
+                    placeholder={CLONE_PROMPT}
+                  />
+                </label>
+                <button type="button" className="ghost mini" onClick={() => setRefText(CLONE_PROMPT)}>
+                  填入门锁模板
+                </button>
+                <div className="row">
+                  <button type="submit" disabled={busy}>
+                    保存到音色库
+                  </button>
+                  <button type="button" className="ghost" onClick={() => void onDeleteVoice()} disabled={!voiceId}>
+                    删除所选
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <>
           <p className="hint">
-            预设、描述和克隆可以同时选。同一文稿会为每个已选音色各生成一段短音频，文件名是「文本 - 声色.wav」。
+            预设、描述和克隆可以同时选。同一文稿会为每个已选音色各生成一段短音频。
           </p>
           <div className="roster">
             <div className="roster-head">
               <strong>已选音色</strong>
-              <span>{voiceCount} 个</span>
+              <span>温度 {temperature.toFixed(2)}</span>
             </div>
             {roster.length || pendingClone ? (
               <div className="roster-list">
@@ -1111,11 +1091,14 @@ export default function App() {
               <p className="hint">还没有选音色。从下面三类里点选，描述音色点「加入已选」。</p>
             )}
           </div>
-          <TempSlider value={temperature} onChange={setTemperature} />
-          <p className="hint">越低越稳、越高越活。所有已选音色配音都用这个温度。稳定配音另外管句号和时长。</p>
+          <p className="hint">温度在文稿栏调节，所有已选音色共用。稳定配音另外管句号和时长。</p>
 
-          <div className="voice-block">
-            <h3>预设说话人</h3>
+          <FoldSection
+            title="预设说话人"
+            badge={`${selectedSpeakers.length}`}
+            open={voiceFold === "preset"}
+            onToggle={() => setVoiceFold("preset")}
+          >
             <p className="hint">
               可多选。点「试听」听一句该说话人的样例，第一次会现场生成并缓存。
               {health?.custom_model_ready ? "" : " 当前还没下载 CustomVoice 权重，请先运行 `make download-custom`。"}
@@ -1158,10 +1141,14 @@ export default function App() {
                 placeholder="语速平稳，语气中性，不拖腔，句末利落，不要额外停顿。"
               />
             </label>
-          </div>
+          </FoldSection>
 
-          <div className="voice-block">
-            <h3>描述音色</h3>
+          <FoldSection
+            title="描述音色"
+            badge={`${designs.length}`}
+            open={voiceFold === "design"}
+            onToggle={() => setVoiceFold("design")}
+          >
             <p className="hint">
               不用上传参考音频。写好描述后点「加入已选」，可以加多条。
               {health?.design_model_ready ? "" : " 当前还没下载 VoiceDesign 权重，请先运行 `make download-design`。"}
@@ -1190,133 +1177,70 @@ export default function App() {
             <button type="button" className="ghost" onClick={addDesign} disabled={!instruct.trim()}>
               加入已选
             </button>
-          </div>
+          </FoldSection>
 
-          <div className="voice-block">
-            <h3>声音克隆{voices.length ? `（${voices.length}）` : ""}</h3>
-            <p className="hint">
-              对着麦克风朗读下面这句，3–10 秒干净人声。保存后会留在本机 `data/voices/`，也可继续上传文件。
-            </p>
+          <FoldSection
+            title="声音克隆"
+            badge={`${selectedVoiceIds.length}${voices.length ? `/${voices.length}` : ""}`}
+            open={voiceFold === "clone"}
+            onToggle={() => setVoiceFold("clone")}
+          >
+            <p className="hint">从已保存的克隆里点选。录音和上传在「录制新音色」里。</p>
             {voices.length ? (
-              <div className="stack">
-                <div className="voice-list">
-                  {voices.map((voice) => (
-                    <div key={voice.id} className={selectedVoiceIds.includes(voice.id) ? "voice-card on" : "voice-card"}>
-                      <button type="button" className="voice-select" onClick={() => toggleCloneVoice(voice.id)}>
-                        <strong>{voice.name}</strong>
-                        <small>
-                          {voice.duration_sec ? `${voice.duration_sec}s` : "已保存"}
-                          {voice.ref_text ? ` · ${voice.ref_text.slice(0, 36)}` : ""}
-                        </small>
+              <div className="voice-list">
+                {voices.map((voice) => (
+                  <div key={voice.id} className={selectedVoiceIds.includes(voice.id) ? "voice-card on" : "voice-card"}>
+                    <button type="button" className="voice-select" onClick={() => toggleCloneVoice(voice.id)}>
+                      <strong>{voice.name}</strong>
+                      <small>
+                        {voice.duration_sec ? `${voice.duration_sec}s` : "已保存"}
+                        {voice.ref_text ? ` · ${voice.ref_text.slice(0, 36)}` : ""}
+                      </small>
+                    </button>
+                    <div className="voice-actions">
+                      <button type="button" className="ghost mini" onClick={() => void togglePlayVoice(voice.id)}>
+                        {playingVoiceId === voice.id ? "暂停" : "播放"}
                       </button>
-                      <div className="voice-actions">
-                        <button type="button" className="ghost mini" onClick={() => void togglePlayVoice(voice.id)}>
-                          {playingVoiceId === voice.id ? "暂停" : "播放"}
-                        </button>
-                        <button type="button" className="ghost mini" onClick={() => startRenameVoice(voice)}>
-                          重命名
-                        </button>
-                      </div>
-                      {renamingId === voice.id ? (
-                        <form className="voice-rename" onSubmit={(event) => void onRenameVoice(event)}>
-                          <input
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            autoFocus
-                            placeholder="新的音色名称"
-                          />
-                          <button type="submit" disabled={busy || !renameValue.trim()}>
-                            保存
-                          </button>
-                          <button type="button" className="ghost" onClick={() => setRenamingId(null)}>
-                            取消
-                          </button>
-                        </form>
-                      ) : null}
+                      <button type="button" className="ghost mini" onClick={() => startRenameVoice(voice)}>
+                        重命名
+                      </button>
                     </div>
-                  ))}
-                </div>
+                    {renamingId === voice.id ? (
+                      <form className="voice-rename" onSubmit={(event) => void onRenameVoice(event)}>
+                        <input
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          autoFocus
+                          placeholder="新的音色名称"
+                        />
+                        <button type="submit" disabled={busy || !renameValue.trim()}>
+                          保存
+                        </button>
+                        <button type="button" className="ghost" onClick={() => setRenamingId(null)}>
+                          取消
+                        </button>
+                      </form>
+                    ) : null}
+                  </div>
+                ))}
               </div>
             ) : (
-              <p className="hint">还没有保存过克隆音色。保存一次后会留在本机，下次直接选用。</p>
+              <p className="hint">还没有保存过克隆音色。录制一次后会留在本机，下次直接选用。</p>
             )}
-            <form className="stack" onSubmit={onSaveVoice}>
-              <label>
-                音色名称
-                <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
-              </label>
-              <div className="rec-script">
-                <span>请朗读</span>
-                {CLONE_PROMPT}
-              </div>
-              <div className="rec-bar">
-                {recStatus === "recording" ? (
-                  <button type="button" className="rec-stop" onClick={stopMic}>
-                    停止
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => void startMic()} disabled={busy}>
-                    开始录音
-                  </button>
-                )}
-                <span className={recStatus === "recording" ? "rec-live" : "hint"}>
-                  {recStatus === "recording"
-                    ? `录音中 ${recSeconds.toFixed(1)}s / ${REC_MAX_SEC}s`
-                    : recStatus === "ready"
-                      ? `已录 ${recSeconds.toFixed(1)}s`
-                      : "建议 5–8 秒，最长 10 秒"}
-                </span>
-                {recStatus === "ready" ? (
-                  <button
-                    type="button"
-                    className="ghost mini"
-                    onClick={() => {
-                      clearMicTake();
-                      setRefFile(null);
-                    }}
-                  >
-                    重录
-                  </button>
-                ) : null}
-              </div>
-              {recUrl ? <audio className="rec-player" controls src={recUrl} /> : null}
-              <FileField
-                label="或上传参考音频"
-                accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
-                file={refFile}
-                emptyText="wav / m4a / mp3 / 麦克风录音，3–10 秒"
-                onChange={(file) => {
-                  if (file) clearMicTake();
-                  setRefFile(file);
-                }}
-              />
-              <label>
-                朗读稿（需和录音一致）
-                <textarea
-                  rows={3}
-                  value={refText}
-                  onChange={(e) => setRefText(e.target.value)}
-                  placeholder={CLONE_PROMPT}
-                />
-              </label>
-              <button type="button" className="ghost mini" onClick={() => setRefText(CLONE_PROMPT)}>
-                填入门锁模板
-              </button>
-              <div className="row">
-                <button type="submit" disabled={busy}>
-                  保存到音色库
-                </button>
-                <button type="button" className="ghost" onClick={() => void onDeleteVoice()} disabled={!voiceId}>
-                  删除所选
-                </button>
-              </div>
-            </form>
-          </div>
+            <button type="button" className="ghost" onClick={() => setCloneStudioOpen(true)}>
+              录制新音色
+            </button>
+          </FoldSection>
+            </>
+          )}
         </section>
 
-        <section className="panel">
-          <h2>2. Markdown 文稿</h2>
-          <form className="stack" onSubmit={onGenerate}>
+        <section className="panel studio-script">
+          <header className="panel-head">
+            <h2>文稿</h2>
+            <span>{filledSegments.length} 段</span>
+          </header>
+          <form className="stack studio-form" onSubmit={onGenerate}>
             <div className="script-controls">
               <label>
                 语言
@@ -1417,62 +1341,60 @@ export default function App() {
             </button>
           </form>
         </section>
-      </main>
 
-      <section className="panel playback">
-        <div>
-          <h2>3. 分段成片</h2>
-          <p className="hint">
-            {API_BASE
-              ? "成片保存在 Mac 的 data/output/。打包 zip 是每一段短音频；整轨是拼好的一条 WAV。24-bit 大文件建议在本机打开 http://127.0.0.1:8000 下载。"
-              : "打包 zip 是「文本 - 声色.wav」分段。整轨 WAV 按编号拼成一条。如果只要一整段，文稿不要编成 1. 2. 3.。试听是 16-bit，下载是 24-bit。"}
-          </p>
-        </div>
+      <section className="panel studio-output">
+        <header className="panel-head">
+          <h2>成片</h2>
+        </header>
+        <p className="hint">
+          {API_BASE
+            ? "成片在 Mac 的 data/output/。zip 是分段；整轨是拼好的 WAV。"
+            : "zip 是「文本 - 声色.wav」分段，整轨按编号拼接。试听 16-bit，下载 24-bit。"}
+        </p>
         {history.length ? (
-          <div className="history-list">
-            {history.map((item) => (
-              <div key={item.id} className={job?.id === item.id ? "history-card on" : "history-card"}>
-                <button type="button" className="history-select" onClick={() => void openHistory(item.id)}>
-                  <strong>{item.title || item.id}</strong>
-                  <small>
-                    {formatWhen(item.created_at)}
-                    {item.mode ? ` · ${MODE_LABEL[item.mode] || item.mode}` : ""}
-                    {item.speakers?.length ? ` · ${item.speakers.join(" / ")}` : item.speaker ? ` · ${item.speaker}` : ""}
-                    {item.audio_sec ? ` · ${item.audio_sec}s` : ""}
-                    {item.chunks && item.speakers && item.speakers.length > 1
-                      ? ` · ${item.chunks} 段 × ${item.speakers.length} 音色`
-                      : item.segments?.length
-                        ? ` · ${item.segments.length} 段`
-                        : item.chunks
-                          ? ` · ${item.chunks} 段`
-                          : ""}
-                    {item.status !== "done" ? ` · ${item.status}` : ""}
-                  </small>
-                </button>
-                {item.status === "done" ? (
-                  <div className="history-actions">
-                    {jobNeedsZip(item) ? (
-                      <>
-                        <button type="button" className="ghost mini" onClick={() => void onDownloadZip(item)}>
-                          打包分段
-                        </button>
-                        <button type="button" className="ghost mini" onClick={() => void onDownloadFullTrack(item)}>
-                          下载整轨
-                        </button>
-                      </>
-                    ) : (
-                      <button type="button" className="ghost mini" onClick={() => void onDownloadFullTrack(item)}>
-                        下载
-                      </button>
-                    )}
-                    <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
-                      删除
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
+          <FoldSection
+            title="历史"
+            badge={`${history.length}${job?.title ? ` · ${job.title}` : job?.id ? ` · ${job.id}` : ""}`}
+            open={historyOpen}
+            onToggle={() => setHistoryOpen((current) => !current)}
+            className="history-fold"
+          >
+            <div className="history-list clips">
+              {history.map((item) => (
+                <div key={item.id} className={job?.id === item.id ? "media-card on" : "media-card"}>
+                  <AudioRow
+                    label={item.title || item.id}
+                    title={historyHint(item)}
+                    src={item.status === "done" ? item.download_url || undefined : undefined}
+                    onLabelClick={() => void openHistory(item.id)}
+                    actions={
+                      item.status === "done" ? (
+                        <>
+                          {jobNeedsZip(item) ? (
+                            <>
+                              <button type="button" className="ghost mini" onClick={() => void onDownloadZip(item)}>
+                                打包分段
+                              </button>
+                              <button type="button" className="ghost mini" onClick={() => void onDownloadFullTrack(item)}>
+                                下载整轨
+                              </button>
+                            </>
+                          ) : (
+                            <button type="button" className="ghost mini" onClick={() => void onDownloadFullTrack(item)}>
+                              下载
+                            </button>
+                          )}
+                          <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
+                            删除
+                          </button>
+                        </>
+                      ) : null
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </FoldSection>
         ) : (
           <p className="hint">还没有成片。生成一次后会留在历史记录里。</p>
         )}
@@ -1495,57 +1417,25 @@ export default function App() {
             ) : null}
             {job.status === "done" && jobNeedsZip(job) ? (
               <div className="tracks">
-                {zipUrl ? (
-                  <button type="button" className="ghost" onClick={() => void onDownload(zipUrl, `${job.id}.zip`)}>
-                    打包全部分段
-                  </button>
-                ) : null}
-                {job.download_url ? (
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => void onDownload(withDownload(job.download_url || ""), `${job.id}.wav`)}
-                  >
-                    下载整轨
-                  </button>
-                ) : null}
+                <button type="button" className="ghost" onClick={() => void onDownloadZip(job)}>
+                  打包全部分段
+                </button>
+                <button type="button" className="ghost" onClick={() => void onDownloadFullTrack(job)}>
+                  下载整轨
+                </button>
               </div>
             ) : null}
             {job.status === "done" && job.segments?.length ? (
-              <ol className="clips">
-                {groupSegments(job.segments).map((group) => (
-                  <li key={group.clips.map((clip) => clip.index).join("-")}>
-                    {group.clips.length > 1 ? <p>{group.text}</p> : null}
-                    <div className="clip-voices">
-                      {group.clips.map((segment) => {
-                        const name = clipLabel(segment);
-                        return (
-                          <div key={segment.index} className="clip-voice">
-                            <strong>{group.clips.length > 1 ? segment.voice || name : name}</strong>
-                            {group.clips.length === 1 && group.text && group.text !== name ? <p>{group.text}</p> : null}
-                            <audio controls src={segment.url} />
-                            <button
-                              type="button"
-                              className="ghost mini"
-                              onClick={() => void onDownload(withDownload(segment.url), wavName(segment.filename || name))}
-                            >
-                              下载
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </li>
-                ))}
-              </ol>
+              <ClipList segments={job.segments} onDownload={onDownload} />
             ) : null}
           </div>
         ) : history.length ? null : (
           <p className="hint">生成结果会按编号显示在这里。</p>
         )}
       </section>
-      </>
+      </div>
       )}
+      </div>
     </div>
   );
 }

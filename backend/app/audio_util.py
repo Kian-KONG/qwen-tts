@@ -22,6 +22,15 @@ from .config import (
 _UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\n\r\t]+')
 
 
+def is_packable_clip(name: str) -> bool:
+    stem = name.lower()
+    if name.startswith(".") or ".browser." in name:
+        return False
+    if name == "full.wav" or name.startswith("完整轨") or stem.startswith("full."):
+        return False
+    return True
+
+
 def clip_stem(text: str, voice: str) -> str:
     left = _UNSAFE_NAME.sub(" ", (text or "").strip())
     left = re.sub(r"\s+", " ", left).strip(" .") or "片段"
