@@ -865,6 +865,7 @@ label.check input {
 
 .voice-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

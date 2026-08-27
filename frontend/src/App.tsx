@@ -796,17 +796,23 @@ export default function App() {
     }
   }
 
-  async function onDeleteVoice() {
-    if (!voiceId) return;
-    if (playingVoiceId === voiceId) {
+  async function onDeleteVoice(id: string, name?: string) {
+    const label = name || id;
+    if (!window.confirm(`删除克隆音色「${label}」？录音会从本机去掉，不能恢复。`)) return;
+    if (playingVoiceId === id) {
       voicePlayerRef.current?.pause();
       setPlayingVoiceId(null);
     }
-    await deleteVoice(voiceId);
-    setSelectedVoiceIds((current) => current.filter((id) => id !== voiceId));
-    setVoiceId("");
-    setRenamingId(null);
-    await refresh();
+    try {
+      await deleteVoice(id);
+      setSelectedVoiceIds((current) => current.filter((item) => item !== id));
+      if (voiceId === id) setVoiceId("");
+      if (renamingId === id) setRenamingId(null);
+      await refresh();
+      setMessage(`已删除 ${label}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除失败");
+    }
   }
 
   async function onDownload(url: string, filename: string) {
@@ -1045,14 +1051,9 @@ export default function App() {
                 <button type="button" className="ghost mini" onClick={() => setRefText(CLONE_PROMPT)}>
                   填入门锁模板
                 </button>
-                <div className="row">
-                  <button type="submit" disabled={busy}>
-                    保存到音色库
-                  </button>
-                  <button type="button" className="ghost" onClick={() => void onDeleteVoice()} disabled={!voiceId}>
-                    删除所选
-                  </button>
-                </div>
+                <button type="submit" disabled={busy}>
+                  保存到音色库
+                </button>
               </form>
             </div>
           ) : (
@@ -1203,6 +1204,13 @@ export default function App() {
                       </button>
                       <button type="button" className="ghost mini" onClick={() => startRenameVoice(voice)}>
                         重命名
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost mini"
+                        onClick={() => void onDeleteVoice(voice.id, voice.name)}
+                      >
+                        删除
                       </button>
                     </div>
                     {renamingId === voice.id ? (
