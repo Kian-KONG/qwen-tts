@@ -1,10 +1,10 @@
 import { apiUrl, withDownload, type Job, type JobSegment } from "../api";
 
 export function clipLabel(segment: { text?: string | null; voice?: string | null; filename?: string | null }): string {
+  const text = (segment.text || "").trim();
+  if (text) return text;
   if (segment.filename) return segment.filename.replace(/\.wav$/i, "");
-  const text = (segment.text || "片段").trim() || "片段";
-  const voice = (segment.voice || "音色").trim() || "音色";
-  return `${text} - ${voice}`;
+  return "片段";
 }
 
 export function wavName(label: string): string {

@@ -269,12 +269,10 @@ class TTSEngine:
                 voice_name = str(voice.get("name") or sid)
                 clip_paths: list[Path] = []
                 label = (script_name or "").strip() or "文稿"
-                for local_i, (chunk, wav) in enumerate(zip(chunks, wavs), start=1):
+                for chunk, wav in zip(chunks, wavs):
                     clip_index += 1
-                    filename = audio_util.unique_file_name(
-                        segment_dir,
-                        audio_util.job_clip_stem(label, voice_name, created_at, local_i),
-                        used_names,
+                    filename = audio_util.unique_wav_name(
+                        segment_dir, chunk, voice_name, used_names, created_at
                     )
                     raw_path = segment_dir / f".seg_{clip_index:03d}.raw.wav"
                     out_seg = segment_dir / filename

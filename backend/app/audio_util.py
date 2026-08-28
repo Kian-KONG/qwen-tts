@@ -71,12 +71,16 @@ def join_file_parts(*parts: str) -> str:
     return " - ".join(part for part in cleaned if part) or "文稿"
 
 
-def clip_stem(text: str, voice: str) -> str:
-    return join_file_parts(safe_stem(text, "片段", 40), safe_stem(voice, "音色", 24))
+def clip_stem(text: str, voice: str, created_at: Any = None) -> str:
+    parts = [safe_stem(text, "片段", 80), safe_stem(voice, "音色", 24)]
+    stamp = job_stamp(created_at) if created_at else ""
+    if stamp:
+        parts.append(stamp)
+    return " - ".join(part for part in parts if part) or "片段"
 
 
 def unique_file_name(folder: Path, stem: str, used: set[str], suffix: str = ".wav") -> str:
-    base = safe_stem(stem, "音频", 120)
+    base = safe_stem(stem, "音频", 180)
     name = f"{base}{suffix}"
     index = 2
     while name.lower() in used or (folder / name).exists():
@@ -86,12 +90,12 @@ def unique_file_name(folder: Path, stem: str, used: set[str], suffix: str = ".wa
     return name
 
 
-def unique_wav_name(folder: Path, text: str, voice: str, used: set[str]) -> str:
-    return unique_file_name(folder, clip_stem(text, voice), used)
+def unique_wav_name(folder: Path, text: str, voice: str, used: set[str], created_at: Any = None) -> str:
+    return unique_file_name(folder, clip_stem(text, voice, created_at), used)
 
 
-def job_clip_stem(script_name: str, voice: str, created_at: Any, index: int) -> str:
-    return f"{join_file_parts(script_name or '文稿', voice, job_stamp(created_at))}-{index:03d}"
+def job_clip_stem(text: str, voice: str, created_at: Any = None) -> str:
+    return clip_stem(text, voice, created_at)
 
 
 def job_track_stem(script_name: str, voice: str, created_at: Any) -> str:
@@ -99,11 +103,8 @@ def job_track_stem(script_name: str, voice: str, created_at: Any) -> str:
 
 
 def job_archive_stem(script_name: str, created_at: Any, speakers: list[str] | None = None) -> str:
-    voice = ""
     names = [str(item).strip() for item in (speakers or []) if str(item).strip()]
-    if len(names) == 1:
-        voice = names[0]
-    return join_file_parts(script_name or "文稿", voice, job_stamp(created_at))
+    return join_file_parts(script_name or "文稿", *names[:4], job_stamp(created_at))
 
 
 def content_disposition_attachment(filename: str) -> str:

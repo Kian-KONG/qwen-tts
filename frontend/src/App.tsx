@@ -1507,7 +1507,7 @@ export default function App() {
                 : "已关闭稳定配音，短句语气和时长会更随性。温度仍按上面的 temp 生效。"}
             </p>
             <p className="hint">
-              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段短音频，不会连读成一条。下载文件名是「列表名 - 音色 - 时间.wav」。也可以导入 Excel / CSV，每个非空单元格就是一段。
+              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段短音频，不会连读成一条。zip 仍是「列表名 - 音色 - 时间」；里面每段是「这句文稿 - 音色 - 时间.wav」，抽卡重配同一句时按文稿名对上替换。也可以导入 Excel / CSV，每个非空单元格就是一段。
             </p>
             <FileField
               label="导入 Excel / CSV"
@@ -1593,8 +1593,8 @@ export default function App() {
         </header>
         <p className="hint">
           {API_BASE
-            ? "成片在 Mac 的 data/output/。zip 是分段；整轨是拼好的 WAV。文件名用列表名 + 音色 + 时间。"
-            : "zip 是「列表名 - 音色 - 时间.wav」分段，整轨按编号拼接。试听 16-bit，下载 24-bit。"}
+            ? "成片在 Mac 的 data/output/。zip 仍是列表名 + 音色 + 时间；里面每段是「文稿 - 音色 - 时间.wav」，按句子替换。"
+            : "zip 包名仍是「列表名 - 音色 - 时间」；里面分段是「文稿 - 音色 - 时间.wav」，同一句重配后按文稿名替换。整轨按编号拼接。试听 16-bit，下载 24-bit。"}
         </p>
         {history.length ? (
           <FoldSection
@@ -1679,7 +1679,7 @@ export default function App() {
               </button>
             ) : null}
             {job.status === "done" && job.local_dir && !API_BASE ? (
-              <p className="hint">本机目录 {job.local_dir} · 文件名「列表名 - 音色 - 时间.wav」</p>
+              <p className="hint">本机目录 {job.local_dir} · zip「列表名 - 音色 - 时间」· 分段「文稿 - 音色 - 时间.wav」</p>
             ) : null}
             {job.status === "done" && jobNeedsZip(job) ? (
               <div className="tracks">

@@ -96,7 +96,7 @@ def to_public_job(
     ]
     speakers = [name for name in speakers if name]
     name = (script_name or "").strip()
-    archive = job_archive_stem(name, created_at, speakers) if name else job_id
+    archive = job_archive_stem(name or "文稿", created_at, speakers)
     zip_url = None
     if download and (segments if zip_if_segments else True):
         zip_url = f"/api/jobs/{job_id}/zip"
