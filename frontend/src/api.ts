@@ -47,6 +47,9 @@ export type Job = {
   speakers?: string[] | null;
   created_at?: string;
   title?: string;
+  script_name?: string | null;
+  download_name?: string | null;
+  zip_name?: string | null;
   local_dir?: string | null;
   mode?: string | null;
   speaker?: string | null;
@@ -354,6 +357,7 @@ export async function createJob(opts: {
   styleInstruct?: string;
   stable?: boolean;
   temperature?: number;
+  scriptName?: string;
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
@@ -372,6 +376,7 @@ export async function createJob(opts: {
   else if (opts.mode === "mixed") body.set("designs", "[]");
   if (opts.refAudio) body.set("ref_audio", opts.refAudio);
   if (opts.refText) body.set("ref_text", opts.refText);
+  if (opts.scriptName) body.set("script_name", opts.scriptName);
   const res = await request("/api/jobs", { method: "POST", body });
   return withJobUrls(await res.json());
 }

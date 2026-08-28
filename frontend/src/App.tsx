@@ -42,7 +42,7 @@ import { AudioRow } from "./components/AudioRow";
 import { ClipList } from "./components/ClipList";
 import { ScriptLists, type ScriptPending } from "./components/ScriptLists";
 import { FoldSection } from "./components/FoldSection";
-import { jobNeedsZip, jobFullTrackUrl, jobZipUrl, wavName } from "./lib/jobUtils";
+import { jobFullTrackName, jobFullTrackUrl, jobNeedsZip, jobZipName, jobZipUrl, wavName } from "./lib/jobUtils";
 import { useHashRoute } from "./route";
 
 const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
@@ -153,6 +153,11 @@ const JOB_STATUS: Record<string, string> = {
 
 function jobActive(status?: string) {
   return status === "queued" || status === "running" || status === "cancelling";
+}
+
+function jobLost(error: unknown) {
+  const detail = error instanceof Error ? error.message : String(error || "");
+  return /not found|找不到/i.test(detail);
 }
 
 type DesignPick = { id: string; name: string; instruct: string };
@@ -389,8 +394,23 @@ export default function App() {
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error" || job.status === "cancelled") return;
     const timer = window.setInterval(async () => {
-      const next = await getJob(job.id);
-      setJob(next);
+      try {
+        const next = await getJob(job.id);
+        setJob(next);
+      } catch (error) {
+        if (!jobLost(error)) return;
+        setJob((current) =>
+          current && current.id === job.id
+            ? { ...current, status: "error", error: "任务已中断（服务重启后丢失），请重新点分段配音" }
+            : current,
+        );
+        setMessage("上次生成在服务重启时丢掉了，重新点一次分段配音即可");
+        try {
+          window.localStorage.removeItem(JOB_ID_KEY);
+        } catch {
+          /* ignore */
+        }
+      }
     }, 1200);
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status]);
@@ -445,8 +465,13 @@ export default function App() {
         try {
           const next = await getJob(pick);
           setJob(next);
-        } catch {
-          /* stale id after files were deleted */
+        } catch (error) {
+          try {
+            window.localStorage.removeItem(JOB_ID_KEY);
+          } catch {
+            /* ignore */
+          }
+          if (jobLost(error)) setMessage("上次未完成的任务已经不在了，重新点一次分段配音即可");
         }
       })();
     }
@@ -830,6 +855,7 @@ export default function App() {
         refText: pendingClone ? refText : undefined,
         batchSize,
         language,
+        scriptName: scriptName.trim() || "文稿",
       });
       setJob(next);
       try {
@@ -852,6 +878,20 @@ export default function App() {
       setMessage(next.status === "cancelled" ? "已终止配音" : "正在终止，当前批次结束后停下");
       void refreshHistory();
     } catch (error) {
+      if (jobLost(error)) {
+        setJob((current) =>
+          current && current.id === id
+            ? { ...current, status: "error", error: "任务已中断（服务重启后丢失），请重新点分段配音" }
+            : current,
+        );
+        setMessage("任务已经不在了，直接重新生成即可");
+        try {
+          window.localStorage.removeItem(JOB_ID_KEY);
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
       setMessage(error instanceof Error ? error.message : "终止失败");
     }
   }
@@ -980,16 +1020,16 @@ export default function App() {
   }
 
   function onDownloadZip(item: Job) {
-    void onDownload(jobZipUrl(item), `${item.id}.zip`);
+    void onDownload(jobZipUrl(item), jobZipName(item));
   }
 
   function onDownloadFullTrack(item: Job) {
     const segment = item.segments?.[0];
     if (!jobNeedsZip(item) && segment?.url) {
-      void onDownload(withDownload(segment.url), wavName(segment.filename || item.title || item.id));
+      void onDownload(withDownload(segment.url), wavName(segment.filename || jobFullTrackName(item)));
       return;
     }
-    void onDownload(jobFullTrackUrl(item), `${item.id}.wav`);
+    void onDownload(jobFullTrackUrl(item), jobFullTrackName(item));
   }
 
   async function openHistory(id: string) {
@@ -1467,7 +1507,7 @@ export default function App() {
                 : "已关闭稳定配音，短句语气和时长会更随性。温度仍按上面的 temp 生效。"}
             </p>
             <p className="hint">
-              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段短音频，不会连读成一条。下载文件名是「文本 - 声色.wav」。也可以导入 Excel / CSV，每个非空单元格就是一段。
+              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段短音频，不会连读成一条。下载文件名是「列表名 - 音色 - 时间.wav」。也可以导入 Excel / CSV，每个非空单元格就是一段。
             </p>
             <FileField
               label="导入 Excel / CSV"
@@ -1553,8 +1593,8 @@ export default function App() {
         </header>
         <p className="hint">
           {API_BASE
-            ? "成片在 Mac 的 data/output/。zip 是分段；整轨是拼好的 WAV。"
-            : "zip 是「文本 - 声色.wav」分段，整轨按编号拼接。试听 16-bit，下载 24-bit。"}
+            ? "成片在 Mac 的 data/output/。zip 是分段；整轨是拼好的 WAV。文件名用列表名 + 音色 + 时间。"
+            : "zip 是「列表名 - 音色 - 时间.wav」分段，整轨按编号拼接。试听 16-bit，下载 24-bit。"}
         </p>
         {history.length ? (
           <FoldSection
@@ -1639,7 +1679,7 @@ export default function App() {
               </button>
             ) : null}
             {job.status === "done" && job.local_dir && !API_BASE ? (
-              <p className="hint">本机目录 {job.local_dir} · 文件名「文本 - 声色.wav」</p>
+              <p className="hint">本机目录 {job.local_dir} · 文件名「列表名 - 音色 - 时间.wav」</p>
             ) : null}
             {job.status === "done" && jobNeedsZip(job) ? (
               <div className="tracks">

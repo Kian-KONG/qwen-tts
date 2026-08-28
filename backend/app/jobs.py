@@ -31,6 +31,7 @@ class Job:
     voices: list[dict] = field(default_factory=list)
     stable: bool = True
     temperature: float = 0.3
+    script_name: str = ""
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
 
 
@@ -115,6 +116,8 @@ class JobRunner:
                     voices=job.voices or None,
                     stable=job.stable,
                     temperature=job.temperature,
+                    script_name=job.script_name,
+                    created_at=job.created_at,
                     progress_cb=on_progress,
                     cancel_check=cancel_check,
                 )

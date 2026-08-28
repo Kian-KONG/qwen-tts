@@ -5,7 +5,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
+from urllib.parse import quote
 
 import numpy as np
 import soundfile as sf
@@ -20,36 +23,92 @@ from .config import (
 )
 
 _UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\n\r\t]+')
+_CN = timezone(timedelta(hours=8))
 
 
 def is_packable_clip(name: str) -> bool:
     stem = name.lower()
     if name.startswith(".") or ".browser." in name:
         return False
-    if name == "full.wav" or name.startswith("完整轨") or stem.startswith("full."):
+    if name == "full.wav" or "完整轨" in name or stem.startswith("full."):
         return False
     return True
 
 
+def safe_stem(value: str, fallback: str = "未命名", limit: int = 48) -> str:
+    text = _UNSAFE_NAME.sub(" ", (value or "").strip())
+    text = re.sub(r"\s+", " ", text).strip(" .") or fallback
+    if len(text) > limit:
+        text = text[:limit].rstrip(" .") or fallback
+    return text
+
+
+def _job_time(created_at: Any = None) -> datetime:
+    if isinstance(created_at, datetime):
+        dt = created_at
+    elif created_at:
+        try:
+            dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        except ValueError:
+            dt = datetime.now(_CN)
+    else:
+        dt = datetime.now(_CN)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_CN)
+
+
+def job_stamp(created_at: Any = None) -> str:
+    return _job_time(created_at).strftime("%Y%m%d-%H%M")
+
+
+def job_stamp_display(created_at: Any = None) -> str:
+    return _job_time(created_at).strftime("%m-%d %H:%M")
+
+
+def join_file_parts(*parts: str) -> str:
+    cleaned = [safe_stem(part, "", 48) for part in parts]
+    return " - ".join(part for part in cleaned if part) or "文稿"
+
+
 def clip_stem(text: str, voice: str) -> str:
-    left = _UNSAFE_NAME.sub(" ", (text or "").strip())
-    left = re.sub(r"\s+", " ", left).strip(" .") or "片段"
-    right = _UNSAFE_NAME.sub(" ", (voice or "").strip())
-    right = re.sub(r"\s+", " ", right).strip(" .") or "音色"
-    if len(left) > 40:
-        left = left[:40].rstrip()
-    return f"{left} - {right}"
+    return join_file_parts(safe_stem(text, "片段", 40), safe_stem(voice, "音色", 24))
 
 
-def unique_wav_name(folder: Path, text: str, voice: str, used: set[str]) -> str:
-    base = clip_stem(text, voice)
-    name = f"{base}.wav"
+def unique_file_name(folder: Path, stem: str, used: set[str], suffix: str = ".wav") -> str:
+    base = safe_stem(stem, "音频", 120)
+    name = f"{base}{suffix}"
     index = 2
     while name.lower() in used or (folder / name).exists():
-        name = f"{base} {index}.wav"
+        name = f"{base} {index}{suffix}"
         index += 1
     used.add(name.lower())
     return name
+
+
+def unique_wav_name(folder: Path, text: str, voice: str, used: set[str]) -> str:
+    return unique_file_name(folder, clip_stem(text, voice), used)
+
+
+def job_clip_stem(script_name: str, voice: str, created_at: Any, index: int) -> str:
+    return f"{join_file_parts(script_name or '文稿', voice, job_stamp(created_at))}-{index:03d}"
+
+
+def job_track_stem(script_name: str, voice: str, created_at: Any) -> str:
+    return join_file_parts(script_name or "文稿", voice, job_stamp(created_at), "完整轨")
+
+
+def job_archive_stem(script_name: str, created_at: Any, speakers: list[str] | None = None) -> str:
+    voice = ""
+    names = [str(item).strip() for item in (speakers or []) if str(item).strip()]
+    if len(names) == 1:
+        voice = names[0]
+    return join_file_parts(script_name or "文稿", voice, job_stamp(created_at))
+
+
+def content_disposition_attachment(filename: str) -> str:
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii").replace('"', "").strip() or "download"
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
 
 
 def ffmpeg_bin() -> str | None:

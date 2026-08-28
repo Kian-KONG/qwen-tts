@@ -2,14 +2,35 @@ from __future__ import annotations
 
 from typing import Any
 
+from .audio_util import job_archive_stem, job_stamp_display
 
-def job_title(text: str, segments: list[dict]) -> str:
-    for item in segments:
-        value = str(item.get("text") or "").strip()
-        if value:
-            return value[:48]
-    line = (text or "").strip().split("\n")[0]
-    return line.lstrip("0123456789.、)）:： ").strip()[:48]
+
+def job_title(
+    text: str,
+    segments: list[dict],
+    *,
+    script_name: str = "",
+    created_at: Any = None,
+    speakers: list[str] | None = None,
+) -> str:
+    label = (script_name or "").strip()
+    if not label:
+        for item in segments:
+            value = str(item.get("text") or "").strip()
+            if value:
+                label = value[:48]
+                break
+        if not label:
+            line = (text or "").strip().split("\n")[0]
+            label = line.lstrip("0123456789.、)）:： ").strip()[:48] or "文稿"
+    parts = [label]
+    names = [str(item).strip() for item in (speakers or []) if str(item).strip()]
+    if names:
+        parts.append(" / ".join(names[:4]))
+    stamp = job_stamp_display(created_at) if created_at else ""
+    if stamp:
+        parts.append(stamp)
+    return " · ".join(parts)
 
 
 def _public_segments(job_id: str, raw: list[dict]) -> list[dict]:
@@ -63,6 +84,7 @@ def to_public_job(
     local_dir: str | None = None,
     include_text: bool = False,
     default_chunks: bool = False,
+    script_name: str = "",
 ) -> dict:
     payload = dict(stats or {})
     raw_segments = list(payload.pop("segments", []) or [])
@@ -73,6 +95,8 @@ def to_public_job(
         str(item.get("name") or item.get("id") or "") for item in (voices or [])
     ]
     speakers = [name for name in speakers if name]
+    name = (script_name or "").strip()
+    archive = job_archive_stem(name, created_at, speakers) if name else job_id
     zip_url = None
     if download and (segments if zip_if_segments else True):
         zip_url = f"/api/jobs/{job_id}/zip"
@@ -82,7 +106,10 @@ def to_public_job(
         "progress": progress,
         "error": error,
         "created_at": created_at,
-        "title": job_title(text, segments),
+        "script_name": name or None,
+        "title": job_title(text, segments, script_name=name, created_at=created_at, speakers=speakers),
+        "download_name": f"{archive}.wav",
+        "zip_name": f"{archive}.zip",
         "download_url": f"/api/jobs/{job_id}/audio" if download else None,
         "zip_url": zip_url,
         "local_dir": local_dir if local_dir is not None else (f"data/output/{job_id}" if download else None),
@@ -111,6 +138,7 @@ def public_from_job(job: Any) -> dict:
         stats=dict(job.stats or {}),
         download=done,
         zip_if_segments=True,
+        script_name=getattr(job, "script_name", "") or "",
     )
 
 
@@ -153,4 +181,5 @@ def public_from_record(record: dict, *, full_exists: bool, inferred_segments: li
         local_dir=f"data/output/{job_id}",
         include_text=True,
         default_chunks=True,
+        script_name=str(record.get("script_name") or ""),
     )

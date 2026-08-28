@@ -46,6 +46,16 @@ export function jobZipUrl(job: Job): string {
   return job.zip_url || apiUrl(`/api/jobs/${job.id}/zip`);
 }
 
+export function jobZipName(job: Job): string {
+  return job.zip_name || `${job.title || job.id}.zip`;
+}
+
+export function jobFullTrackName(job: Job): string {
+  const track = job.tracks?.[0]?.filename;
+  if (track) return wavName(track);
+  return wavName(job.download_name || job.title || job.id);
+}
+
 export function jobFullTrackUrl(job: Job): string {
   return withDownload(job.download_url || apiUrl(`/api/jobs/${job.id}/audio`));
 }

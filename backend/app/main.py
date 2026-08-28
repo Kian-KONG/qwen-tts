@@ -215,6 +215,7 @@ class JobRequest(BaseModel):
     style_instruct: Optional[str] = None
     stable: bool = True
     temperature: float = Field(default=TTS_TEMPERATURE, ge=0.05, le=1.5)
+    script_name: Optional[str] = None
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -516,6 +517,8 @@ async def api_create_job(
     style_instruct: Optional[str] = Form(None),
     stable: Optional[str] = Form("true"),
     temperature: Optional[str] = Form(None),
+    script_name: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
@@ -561,6 +564,7 @@ async def api_create_job(
             voices=job_voices,
             stable=_form_flag(stable, True),
             temperature=_form_float(temperature, TTS_TEMPERATURE),
+            script_name=(script_name or title or "").strip() or "文稿",
         )
         return public_job(job)
     except KeyError:
@@ -604,6 +608,7 @@ def api_create_job_json(payload: JobRequest):
         voices=job_voices,
         stable=payload.stable,
         temperature=payload.temperature,
+        script_name=(payload.script_name or "").strip() or "文稿",
     )
     return public_job(job)
 
@@ -646,7 +651,14 @@ def api_job_audio(job_id: str, download: bool = False):
         path = full_wav(job_id, item_list(job_id, "segments"))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _wav_response(path, f"{job_id}.wav", download)
+    tracks = item_list(job_id, "tracks")
+    filename = str((tracks[0] or {}).get("filename") or "") if tracks else ""
+    if not filename:
+        try:
+            filename = str(get_public(job_id).get("download_name") or f"{job_id}.wav")
+        except KeyError:
+            filename = f"{job_id}.wav"
+    return _wav_response(path, filename, download)
 
 
 @app.get("/api/jobs/{job_id}/segments/{index}/audio")
@@ -673,11 +685,15 @@ def api_job_zip(job_id: str):
         body = zip_bytes(job_id, item_list(job_id, "segments"))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="No clip files to pack")
+    try:
+        zip_name = str(get_public(job_id).get("zip_name") or f"{job_id}.zip")
+    except KeyError:
+        zip_name = f"{job_id}.zip"
     return Response(
         body,
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="{job_id}.zip"',
+            "Content-Disposition": audio_util.content_disposition_attachment(zip_name),
             "Content-Length": str(len(body)),
         },
     )

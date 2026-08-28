@@ -143,6 +143,8 @@ class TTSEngine:
         voices: list[dict] | None = None,
         stable: bool = True,
         temperature: float | None = None,
+        script_name: str = "",
+        created_at: str | None = None,
         progress_cb=None,
         cancel_check=None,
     ) -> dict:
@@ -266,9 +268,14 @@ class TTSEngine:
 
                 voice_name = str(voice.get("name") or sid)
                 clip_paths: list[Path] = []
-                for chunk, wav in zip(chunks, wavs):
+                label = (script_name or "").strip() or "文稿"
+                for local_i, (chunk, wav) in enumerate(zip(chunks, wavs), start=1):
                     clip_index += 1
-                    filename = audio_util.unique_wav_name(segment_dir, chunk, voice_name, used_names)
+                    filename = audio_util.unique_file_name(
+                        segment_dir,
+                        audio_util.job_clip_stem(label, voice_name, created_at, local_i),
+                        used_names,
+                    )
                     raw_path = segment_dir / f".seg_{clip_index:03d}.raw.wav"
                     out_seg = segment_dir / filename
                     audio_util.write_wav(raw_path, wav, native_sr)
@@ -288,7 +295,11 @@ class TTSEngine:
                         }
                     )
                 if clip_paths:
-                    track_name = audio_util.unique_wav_name(segment_dir, "完整轨", voice_name, used_names)
+                    track_name = audio_util.unique_file_name(
+                        segment_dir,
+                        audio_util.job_track_stem(label, voice_name, created_at),
+                        used_names,
+                    )
                     out_track = segment_dir / track_name
                     audio_util.concat_wav_files(clip_paths, out_track, gap_ms=GAP_MS)
                     tracks.append(

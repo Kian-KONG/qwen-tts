@@ -44,6 +44,7 @@ def persist_job(job: Any) -> None:
         "mode": job.mode,
         "speaker": job.speaker or None,
         "voices": getattr(job, "voices", None) or [],
+        "script_name": getattr(job, "script_name", "") or "",
         "instruct": job.instruct,
         "batch_size": job.batch_size,
         **_strip_urls(dict(job.stats or {})),
