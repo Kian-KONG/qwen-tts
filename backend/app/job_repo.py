@@ -49,7 +49,7 @@ def item_list(job_id: str, key: str) -> list[dict]:
 def delete_job(job_id: str) -> None:
     try:
         job = runner.get(job_id)
-        if job.status in {"queued", "running"}:
+        if job.status in {"queued", "running", "cancelling"}:
             raise JobBusy("任务还在生成，不能删除")
         runner.forget(job_id)
     except KeyError:

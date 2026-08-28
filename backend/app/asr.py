@@ -12,7 +12,7 @@ from typing import Any
 
 from . import audio_util, chunking
 from .config import ASR_MODEL_DIR, ASR_MODEL_ID, LANGUAGE, LANGUAGE_BY_ID
-from .engine import engine
+from .engine import JobCancelled, engine
 from .paths import is_local_model_dir
 
 ASR_CHUNK_SEC = 180.0
@@ -66,6 +66,7 @@ class ASREngine:
         language: str = LANGUAGE,
         context: str = "",
         progress_cb=None,
+        cancel_check=None,
     ) -> dict:
         if not audio_path or not Path(audio_path).exists():
             raise FileNotFoundError("Audio file is required for transcription")
@@ -110,6 +111,8 @@ class ASREngine:
                 total = max(len(parts), 1)
                 try:
                     for index, part in enumerate(parts):
+                        if cancel_check:
+                            cancel_check()
                         mark(
                             0.4 + 0.55 * (index / total),
                             "transcribing",
@@ -208,6 +211,7 @@ class AsrJob:
     language: str = "Auto"
     context: str = ""
     result: dict[str, Any] = field(default_factory=dict)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
 
 
 class AsrJobRunner:
@@ -232,6 +236,22 @@ class AsrJobRunner:
             raise KeyError(job_id)
         return job
 
+    def cancel(self, job_id: str) -> AsrJob:
+        job = self.get(job_id)
+        if job.status in {"done", "error", "cancelled"}:
+            raise ValueError("任务已经结束")
+        job.cancel_event.set()
+        with self._cv:
+            if job_id in self._pending:
+                self._pending.remove(job_id)
+                job.status = "cancelled"
+                job.stage = "cancelled"
+                job.error = "已终止"
+            elif job.status == "running":
+                job.status = "cancelling"
+                job.stage = "cancelling"
+        return job
+
     def _loop(self) -> None:
         while True:
             with self._cv:
@@ -250,15 +270,28 @@ class AsrJobRunner:
                     if extra:
                         current.result = {**current.result, **extra}
 
+                def cancel_check(current=job) -> None:
+                    if current.cancel_event.is_set():
+                        raise JobCancelled("已终止")
+
+                if job.cancel_event.is_set():
+                    raise JobCancelled("已终止")
                 job.result = asr_engine.transcribe(
                     job.audio_path,
                     language=job.language,
                     context=job.context,
                     progress_cb=on_progress,
+                    cancel_check=cancel_check,
                 )
+                if job.cancel_event.is_set():
+                    raise JobCancelled("已终止")
                 job.progress = 1.0
                 job.stage = "done"
                 job.status = "done"
+            except JobCancelled:
+                job.status = "cancelled"
+                job.stage = "cancelled"
+                job.error = "已终止"
             except Exception as exc:
                 job.status = "error"
                 job.stage = "error"

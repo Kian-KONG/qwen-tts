@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .chunking import split_script
+from .chunking import count_script_items
 from .config import LANGUAGE, SCRIPTS_DIR
 
 INDEX_PATH = SCRIPTS_DIR / "index.json"
@@ -48,12 +48,11 @@ def _preview(markdown: str) -> str:
 
 def _public(item: dict, markdown: str, *, include_text: bool) -> dict:
     language = item.get("language") or LANGUAGE
-    chunks = split_script(markdown, language)
     public = {
         "id": item["id"],
         "name": item["name"],
         "language": language,
-        "chunks": len(chunks),
+        "chunks": count_script_items(markdown),
         "preview": _preview(markdown),
         "created_at": item.get("created_at"),
         "updated_at": item.get("updated_at") or item.get("created_at"),
@@ -70,7 +69,7 @@ def list_scripts() -> list[dict]:
         if not path.exists():
             continue
         markdown = path.read_text(encoding="utf-8")
-        scripts.append(_public(item, markdown, include_text=False))
+        scripts.append(_public(item, markdown, include_text=True))
     scripts.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
     return scripts
 

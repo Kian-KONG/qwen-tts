@@ -51,17 +51,34 @@ def max_chars_for(language: str, override: int | None = None) -> int:
     return 80 if is_cjk_language(language) else 220
 
 
+def count_script_items(text: str) -> int:
+    """Count clips the same way the editor preview does: numbered items, else lines."""
+    return len(list_script_items(text))
+
+
+def list_script_items(text: str) -> list[str]:
+    cleaned = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not cleaned:
+        return []
+    first = next((line.strip() for line in cleaned.split("\n") if line.strip()), "")
+    if _NUMBER_MARK.match(first):
+        numbered = _split_numbered(_break_inline_numbers(cleaned))
+        if numbered:
+            return numbered
+    return [line.strip() for line in cleaned.split("\n") if line.strip()]
+
+
 def split_script(text: str, language: str = "Auto", max_chars: int | None = None) -> list[str]:
     """Prefer numbered-list items; otherwise one non-empty line is one clip."""
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not cleaned:
         return []
 
-    cleaned = _break_inline_numbers(cleaned)
-
-    numbered = _split_numbered(cleaned)
-    if numbered:
-        return numbered
+    first = next((line.strip() for line in cleaned.split("\n") if line.strip()), "")
+    if _NUMBER_MARK.match(first):
+        numbered = _split_numbered(_break_inline_numbers(cleaned))
+        if numbered:
+            return numbered
 
     limit = max_chars_for(language, max_chars)
     tiny = 12 if is_cjk_language(language) else 24

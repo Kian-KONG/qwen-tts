@@ -115,6 +115,7 @@ async function parseError(res: Response): Promise<string> {
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const res = await fetch(apiUrl(path), {
     ...init,
+    cache: "no-store",
     headers: authHeaders(init.headers),
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -185,6 +186,11 @@ export async function createTranscribeJob(
 
 export async function getTranscribeJob(id: string): Promise<Transcript> {
   const res = await request(`/api/transcribe/${id}`);
+  return res.json();
+}
+
+export async function cancelTranscribeJob(id: string): Promise<Transcript> {
+  const res = await request(`/api/transcribe/${encodeURIComponent(id)}/cancel`, { method: "POST" });
   return res.json();
 }
 
@@ -277,7 +283,7 @@ export async function listScripts(): Promise<ScriptList[]> {
 }
 
 export async function getScript(id: string): Promise<ScriptList> {
-  const res = await request(`/api/scripts/${id}`);
+  const res = await request(`/api/scripts/${encodeURIComponent(id)}`);
   return res.json();
 }
 
@@ -298,7 +304,7 @@ export async function updateScript(
   id: string,
   opts: { name?: string; markdown?: string; language?: string },
 ): Promise<ScriptList> {
-  const res = await request(`/api/scripts/${id}`, {
+  const res = await request(`/api/scripts/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(opts),
@@ -307,7 +313,7 @@ export async function updateScript(
 }
 
 export async function deleteScript(id: string): Promise<void> {
-  await request(`/api/scripts/${id}`, { method: "DELETE" });
+  await request(`/api/scripts/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function withDownload(url: string): string {
@@ -383,4 +389,9 @@ export async function listJobs(): Promise<Job[]> {
 
 export async function deleteJob(id: string): Promise<void> {
   await request(`/api/jobs/${id}`, { method: "DELETE" });
+}
+
+export async function cancelJob(id: string): Promise<Job> {
+  const res = await request(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  return withJobUrls(await res.json());
 }

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import shutil
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from .engine import engine
+from .config import OUTPUT_DIR
+from .engine import JobCancelled, engine
 from .history import persist_job
 
 
@@ -29,6 +31,7 @@ class Job:
     voices: list[dict] = field(default_factory=list)
     stable: bool = True
     temperature: float = 0.3
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
 
 
 class JobRunner:
@@ -53,11 +56,30 @@ class JobRunner:
             raise KeyError(job_id)
         return job
 
+    def cancel(self, job_id: str) -> Job:
+        job = self.get(job_id)
+        if job.status in {"done", "error", "cancelled"}:
+            raise ValueError("任务已经结束")
+        job.cancel_event.set()
+        with self._cv:
+            if job_id in self._pending:
+                self._pending.remove(job_id)
+                job.status = "cancelled"
+                job.error = "已终止"
+            elif job.status == "running":
+                job.status = "cancelling"
+        return job
+
     def forget(self, job_id: str) -> None:
         with self._cv:
             if job_id in self._pending:
                 self._pending.remove(job_id)
             self.jobs.pop(job_id, None)
+
+    def _drop_output(self, job_id: str) -> None:
+        out = OUTPUT_DIR / job_id
+        if out.exists():
+            shutil.rmtree(out, ignore_errors=True)
 
     def _loop(self) -> None:
         while True:
@@ -66,11 +88,19 @@ class JobRunner:
                     self._cv.wait()
                 job_id = self._pending.pop(0)
                 job = self.jobs[job_id]
+            if job.cancel_event.is_set():
+                job.status = "cancelled"
+                job.error = "已终止"
+                continue
             job.status = "running"
             try:
 
                 def on_progress(value: float, current=job) -> None:
                     current.progress = round(value, 3)
+
+                def cancel_check(current=job) -> None:
+                    if current.cancel_event.is_set():
+                        raise JobCancelled("已终止")
 
                 job.stats = engine.synthesize(
                     job.text,
@@ -86,13 +116,20 @@ class JobRunner:
                     stable=job.stable,
                     temperature=job.temperature,
                     progress_cb=on_progress,
+                    cancel_check=cancel_check,
                 )
+                if job.cancel_event.is_set():
+                    raise JobCancelled("已终止")
                 job.progress = 1.0
                 job.status = "done"
                 try:
                     persist_job(job)
                 except Exception:
                     pass
+            except JobCancelled:
+                job.status = "cancelled"
+                job.error = "已终止"
+                self._drop_output(job.id)
             except Exception as exc:
                 job.status = "error"
                 job.error = str(exc)

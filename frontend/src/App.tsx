@@ -5,6 +5,8 @@ import {
   createScript,
   createTranscribeJob,
   createVoice,
+  cancelJob,
+  cancelTranscribeJob,
   deleteJob,
   deleteScript,
   deleteVoice,
@@ -38,7 +40,7 @@ import { TranscribePanel } from "./components/TranscribePanel";
 import { AppSidebar } from "./components/AppSidebar";
 import { AudioRow } from "./components/AudioRow";
 import { ClipList } from "./components/ClipList";
-import { ScriptLists } from "./components/ScriptLists";
+import { ScriptLists, type ScriptPending } from "./components/ScriptLists";
 import { FoldSection } from "./components/FoldSection";
 import { jobNeedsZip, jobFullTrackUrl, jobZipUrl, wavName } from "./lib/jobUtils";
 import { useHashRoute } from "./route";
@@ -83,10 +85,15 @@ const VOICE_PRESETS = [
 ];
 
 function parseMarkdownList(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const nonempty = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!nonempty.length) return [];
+  if (!ITEM_MARK.test(nonempty[0])) return nonempty;
+
   const items: string[] = [];
   let current: string | null = null;
   let sawMark = false;
-  const normalized = text.replace(/\r\n/g, "\n").split("\n").flatMap((line) => {
+  const broken = normalized.split("\n").flatMap((line) => {
     const marks = [...line.matchAll(/(?:(?<=\s)|(?<=^))(?:\d{1,3}[\.\)、:：]|\(\d{1,3}\)|\（\d{1,3}\）)\s+/g)];
     if (marks.length < 2) return [line];
     return marks.map((mark, index) => {
@@ -95,7 +102,7 @@ function parseMarkdownList(text: string): string[] {
       return line.slice(start, end).trim();
     }).filter(Boolean);
   });
-  for (const line of normalized) {
+  for (const line of broken) {
     const match = line.match(ITEM_MARK);
     if (match) {
       sawMark = true;
@@ -109,10 +116,7 @@ function parseMarkdownList(text: string): string[] {
   }
   if (current?.trim()) items.push(current.trim());
   if (sawMark && items.length) return items;
-  return text
-    .split(/\n+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return nonempty;
 }
 
 function toMarkdown(items: string[]): string {
@@ -138,6 +142,18 @@ const MODE_LABEL: Record<string, string> = {
   clone: "克隆",
   mixed: "混合",
 };
+
+const JOB_STATUS: Record<string, string> = {
+  queued: "排队中",
+  running: "生成中",
+  cancelling: "正在终止",
+  cancelled: "已终止",
+  error: "失败",
+};
+
+function jobActive(status?: string) {
+  return status === "queued" || status === "running" || status === "cancelling";
+}
 
 type DesignPick = { id: string; name: string; instruct: string };
 type VoiceFold = "preset" | "design" | "clone";
@@ -254,8 +270,11 @@ export default function App() {
   const [job, setJob] = useState<Job | null>(null);
   const [history, setHistory] = useState<Job[]>([]);
   const [scripts, setScripts] = useState<ScriptList[]>([]);
+  const [scriptsReady, setScriptsReady] = useState(false);
   const [activeScriptId, setActiveScriptId] = useState("");
   const [scriptName, setScriptName] = useState("");
+  const [scriptPending, setScriptPending] = useState<ScriptPending>(null);
+  const [editorRev, setEditorRev] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -305,14 +324,17 @@ export default function App() {
         listVoices(),
         listLanguages(),
         listSpeakers(),
-        listScripts().catch(() => []),
+        listScripts().catch(() => null),
       ]);
       setHealth(nextHealth);
       setVoices(nextVoices);
       setLanguages(nextLanguages);
       setSpeakers(nextSpeakers.data);
-      setScripts(nextScripts);
-      setActiveScriptId((current) => (current && nextScripts.some((item) => item.id === current) ? current : ""));
+      if (nextScripts) {
+        setScripts(nextScripts);
+        setActiveScriptId((current) => (current && nextScripts.some((item) => item.id === current) ? current : ""));
+      }
+      setScriptsReady(true);
       setSelectedSpeakers((current) => current.filter((id) => nextSpeakers.data.some((item) => item.id === id)));
       setSelectedVoiceIds((current) => current.filter((id) => nextVoices.some((item) => item.id === id)));
       setVoiceId((current) => {
@@ -321,6 +343,7 @@ export default function App() {
       });
       void refreshHistory();
     } catch (error) {
+      setScriptsReady(true);
       setMessage(error instanceof Error ? error.message : "无法连接后端");
     }
   }
@@ -364,7 +387,7 @@ export default function App() {
   }, [voiceId, selectedSpeakers, selectedVoiceIds, designs, railCollapsed, voiceFold, historyOpen]);
 
   useEffect(() => {
-    if (!job || job.status === "done" || job.status === "error") return;
+    if (!job || job.status === "done" || job.status === "error" || job.status === "cancelled") return;
     const timer = window.setInterval(async () => {
       const next = await getJob(job.id);
       setJob(next);
@@ -383,7 +406,7 @@ export default function App() {
   }, [job?.id, job?.status]);
 
   useEffect(() => {
-    if (!asrJob?.id || asrJob.status === "done" || asrJob.status === "error") return;
+    if (!asrJob?.id || asrJob.status === "done" || asrJob.status === "error" || asrJob.status === "cancelled") return;
     const timer = window.setInterval(async () => {
       try {
         const next = await getTranscribeJob(asrJob.id as string);
@@ -460,20 +483,32 @@ export default function App() {
     }
   }
 
+  function applyScript(item: ScriptList) {
+    setMarkdown(item.markdown || "");
+    setActiveScriptId(item.id);
+    setScriptName(item.name);
+    if (item.language) setLanguage(item.language);
+    setExcelName("");
+    setEditorRev((n) => n + 1);
+  }
+
   async function onSaveScript() {
     const name = scriptName.trim();
     if (!name || !markdown.trim()) {
       setMessage("请填写列表名称和文稿");
       return;
     }
+    setScriptPending({ action: "save" });
     try {
       const saved = await createScript({ name, markdown, language });
       setScripts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setActiveScriptId(saved.id);
       setScriptName(saved.name);
-      setMessage(`已保存列表「${saved.name}」· ${saved.chunks || filledSegments.length} 段`);
+      setMessage(`已保存列表「${saved.name}」· ${saved.chunks ?? filledSegments.length} 段`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setScriptPending(null);
     }
   }
 
@@ -483,6 +518,7 @@ export default function App() {
       setMessage("文稿是空的");
       return;
     }
+    setScriptPending({ action: "update", id: activeScriptId });
     try {
       const saved = await updateScript(activeScriptId, {
         name: scriptName.trim() || undefined,
@@ -491,38 +527,47 @@ export default function App() {
       });
       setScripts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setScriptName(saved.name);
-      setMessage(`已更新「${saved.name}」`);
+      setMessage(`已更新「${saved.name}」· ${saved.chunks ?? filledSegments.length} 段`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "更新失败");
+    } finally {
+      setScriptPending(null);
     }
   }
 
   async function onLoadScript(id: string) {
+    const cached = scripts.find((item) => item.id === id);
+    if (cached?.markdown) applyScript(cached);
+    setScriptPending({ action: "load", id });
     try {
       const item = await getScript(id);
-      setMarkdown(item.markdown || "");
-      setActiveScriptId(item.id);
-      setScriptName(item.name);
-      if (item.language) setLanguage(item.language);
-      setMessage(`已载入「${item.name}」· ${item.chunks || 0} 段`);
+      applyScript(item);
+      setScripts((current) => current.map((row) => (row.id === item.id ? { ...row, ...item } : row)));
+      setMessage(`已载入「${item.name}」· ${parseMarkdownList(item.markdown || "").length} 段`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "载入失败");
+      if (!cached?.markdown) setMessage(error instanceof Error ? error.message : "载入失败");
+    } finally {
+      setScriptPending(null);
     }
   }
 
   async function onRenameScript(id: string, name: string) {
+    setScriptPending({ action: "update", id });
     try {
       const saved = await updateScript(id, { name });
-      setScripts((current) => current.map((item) => (item.id === id ? { ...item, ...saved, markdown: undefined } : item)));
+      setScripts((current) => current.map((item) => (item.id === id ? { ...item, ...saved } : item)));
       if (activeScriptId === id) setScriptName(saved.name);
       setMessage(`已重命名为 ${saved.name}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "重命名失败");
+    } finally {
+      setScriptPending(null);
     }
   }
 
   async function onDeleteScript(id: string, name: string) {
     if (!window.confirm(`删除配音列表「${name}」？文稿会从本机去掉。`)) return;
+    setScriptPending({ action: "delete", id });
     try {
       await deleteScript(id);
       setScripts((current) => current.filter((item) => item.id !== id));
@@ -530,6 +575,8 @@ export default function App() {
       setMessage(`已删除 ${name}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "删除失败");
+    } finally {
+      setScriptPending(null);
     }
   }
 
@@ -709,6 +756,17 @@ export default function App() {
     }
   }
 
+  async function onCancelAsr() {
+    if (!asrJob?.id) return;
+    try {
+      const next = await cancelTranscribeJob(asrJob.id);
+      setAsrJob(next);
+      setMessage(next.status === "cancelled" ? "已终止转写" : "正在终止转写");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "终止失败");
+    }
+  }
+
   function applyAsrToScript() {
     if (!asrText.trim()) return;
     const original = (asrJob?.text || "").trim();
@@ -784,6 +842,17 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "提交失败");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onCancelJob(id: string) {
+    try {
+      const next = await cancelJob(id);
+      setJob(next);
+      setMessage(next.status === "cancelled" ? "已终止配音" : "正在终止，当前批次结束后停下");
+      void refreshHistory();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "终止失败");
     }
   }
 
@@ -967,7 +1036,7 @@ export default function App() {
           : item.chunks
             ? `${item.chunks} 段`
             : "",
-      item.status !== "done" ? item.status : "",
+      item.status && item.status !== "done" ? JOB_STATUS[item.status] || item.status : "",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -1045,6 +1114,7 @@ export default function App() {
         onFile={setAsrFile}
         onLanguage={setAsrLanguage}
         onTranscribe={() => void onTranscribe()}
+        onCancel={() => void onCancelAsr()}
         onTextChange={setAsrText}
         onCopy={() => void copyAsrText()}
         onApplyToScript={applyAsrToScript}
@@ -1341,6 +1411,7 @@ export default function App() {
             name={scriptName}
             languages={languages}
             canSave={Boolean(markdown.trim())}
+            pending={scriptPending ?? (!scriptsReady ? { action: "list" } : null)}
             onName={setScriptName}
             onSave={() => void onSaveScript()}
             onUpdate={() => void onUpdateScript()}
@@ -1405,17 +1476,29 @@ export default function App() {
               buttonText="导入表格"
               onChange={(file) => void onImportScript(file)}
             />
-            <textarea
-              ref={editorRef}
-              className="markdown-editor"
-              rows={12}
-              spellCheck={false}
-              value={markdown}
-              onChange={(e) => setMarkdown(e.target.value)}
-              onKeyDown={onMarkdownKeyDown}
-              placeholder={"1. First line.\n2. Second line."}
-            />
-            <ol className="md-preview">
+            <div
+              className={`markdown-wrap${scriptPending?.action === "load" && activeScriptId !== scriptPending.id ? " is-loading" : ""}`}
+            >
+              <textarea
+                key={editorRev}
+                ref={editorRef}
+                className="markdown-editor"
+                rows={12}
+                spellCheck={false}
+                value={markdown}
+                disabled={scriptPending?.action === "load" && activeScriptId !== scriptPending.id}
+                onChange={(e) => setMarkdown(e.target.value)}
+                onKeyDown={onMarkdownKeyDown}
+                placeholder={"1. First line.\n2. Second line."}
+              />
+              {scriptPending?.action === "load" && activeScriptId !== scriptPending.id ? (
+                <div className="markdown-loading" aria-live="polite">
+                  <span className="spin" />
+                  正在载入列表…
+                </div>
+              ) : null}
+            </div>
+            <ol className="md-preview" key={`preview-${editorRev}`}>
               {filledSegments.map((item, index) => (
                 <li key={`${index}-${item.slice(0, 24)}`}>
                   <span>{index + 1}.</span>
@@ -1432,21 +1515,35 @@ export default function App() {
               </button>
               <span>{filledSegments.length} 段</span>
             </div>
-            <button
-              type="submit"
-              disabled={
-                busy ||
-                filledSegments.length === 0 ||
-                voiceCount === 0 ||
-                (selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
-                (designs.length > 0 && health?.design_model_ready === false) ||
-                ((selectedVoiceIds.length > 0 || pendingClone) && health?.model_dir_ready === false)
-              }
-            >
-              {busy
-                ? "提交中…"
-                : `分段配音（${filledSegments.length} 段${voiceCount > 1 ? ` × ${voiceCount} 音色` : ""}）`}
-            </button>
+            {jobActive(job?.status) ? (
+              <button
+                type="button"
+                className="generate stop"
+                disabled={job?.status === "cancelling"}
+                onClick={() => job?.id && void onCancelJob(job.id)}
+              >
+                {job?.status === "cancelling"
+                  ? "正在终止…"
+                  : `终止配音 · ${Math.round((job?.progress || 0) * 100)}%`}
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="generate"
+                disabled={
+                  busy ||
+                  filledSegments.length === 0 ||
+                  voiceCount === 0 ||
+                  (selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
+                  (designs.length > 0 && health?.design_model_ready === false) ||
+                  ((selectedVoiceIds.length > 0 || pendingClone) && health?.model_dir_ready === false)
+                }
+              >
+                {busy
+                  ? "提交中…"
+                  : `分段配音（${filledSegments.length} 段${voiceCount > 1 ? ` × ${voiceCount} 音色` : ""}）`}
+              </button>
+            )}
           </form>
         </section>
 
@@ -1476,7 +1573,16 @@ export default function App() {
                     src={item.status === "done" ? item.download_url || undefined : undefined}
                     onLabelClick={() => void openHistory(item.id)}
                     actions={
-                      item.status === "done" ? (
+                      jobActive(item.status) ? (
+                        <button
+                          type="button"
+                          className="ghost mini stop"
+                          disabled={item.status === "cancelling"}
+                          onClick={() => void onCancelJob(item.id)}
+                        >
+                          {item.status === "cancelling" ? "终止中…" : "终止"}
+                        </button>
+                      ) : item.status === "done" ? (
                         <>
                           {jobNeedsZip(item) ? (
                             <>
@@ -1518,8 +1624,20 @@ export default function App() {
                   } · ${job.audio_sec}s · 耗时 ${job.elapsed_sec}s · RTF ${job.rtf}`
                 : job.status === "error"
                   ? job.error
-                  : `${job.status} · ${Math.round((job.progress || 0) * 100)}%`}
+                  : job.status === "cancelled"
+                    ? "已终止"
+                    : `${JOB_STATUS[job.status] || job.status} · ${Math.round((job.progress || 0) * 100)}%`}
             </p>
+            {jobActive(job.status) ? (
+              <button
+                type="button"
+                className="ghost stop"
+                disabled={job.status === "cancelling"}
+                onClick={() => void onCancelJob(job.id)}
+              >
+                {job.status === "cancelling" ? "正在终止…" : "终止"}
+              </button>
+            ) : null}
             {job.status === "done" && job.local_dir && !API_BASE ? (
               <p className="hint">本机目录 {job.local_dir} · 文件名「文本 - 声色.wav」</p>
             ) : null}

@@ -411,6 +411,16 @@ def api_get_transcribe(job_id: str):
         raise HTTPException(status_code=404, detail="Transcription job not found")
 
 
+@app.post("/api/transcribe/{job_id}/cancel")
+def api_cancel_transcribe(job_id: str):
+    try:
+        return public_asr_job(asr_runner.cancel(job_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Transcription job not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/v1/audio/transcriptions")
 async def openai_transcriptions(
     file: UploadFile = File(...),
@@ -609,6 +619,16 @@ def api_get_job(job_id: str):
         return get_public(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Job not found")
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def api_cancel_job(job_id: str):
+    try:
+        return public_job(runner.cancel(job_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.delete("/api/jobs/{job_id}")

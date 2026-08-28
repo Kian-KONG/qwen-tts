@@ -295,6 +295,7 @@ body,
 .studio-form {
   flex: 1;
   min-height: 0;
+  overflow: auto;
 }
 
 .studio-form.stack {
@@ -312,8 +313,40 @@ body,
 }
 
 .studio-script .voice-list {
-  max-height: 180px;
+  max-height: 140px;
   overflow: auto;
+}
+
+.studio-script .generate {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  width: 100%;
+  margin-top: auto;
+  background: var(--accent);
+  color: #1a140c;
+  border: 0;
+  box-shadow: 0 0 0 12px var(--panel), 0 -18px 22px var(--panel);
+}
+
+.studio-script .generate:disabled {
+  opacity: 1;
+  background: var(--accent-dim);
+  color: #1a140c;
+}
+
+.studio-script .generate.stop,
+.studio-script .generate.stop:disabled,
+button.stop {
+  background: var(--danger);
+  color: #f4ece6;
+  border: 0;
+}
+
+button.ghost.stop {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
 }
 
 .studio-output .history-fold {
@@ -887,6 +920,9 @@ label.check input {
 }
 
 button.mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 7px 12px;
   font-size: 13px;
 }
@@ -969,13 +1005,73 @@ button.rec-stop {
   tab-size: 2;
 }
 
+.markdown-wrap {
+  position: relative;
+  flex: 1 1 140px;
+  min-height: 140px;
+  max-height: 240px;
+  display: flex;
+}
+
+.markdown-wrap .markdown-editor {
+  flex: 1;
+  min-height: 160px;
+  width: 100%;
+}
+
+.markdown-wrap.is-loading .markdown-editor {
+  opacity: 0.45;
+}
+
+.markdown-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--accent);
+  background: rgba(18, 17, 14, 0.62);
+  font-size: 13px;
+}
+
+.spin {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.65s linear infinite;
+  flex: none;
+}
+
+button .spin,
+.loading-line .spin,
+.markdown-loading .spin {
+  width: 12px;
+  height: 12px;
+}
+
+.loading-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .md-preview {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
   gap: 6px;
-  max-height: 180px;
+  max-height: 120px;
   overflow: auto;
 }
 
@@ -986,6 +1082,18 @@ button.rec-stop {
   padding: 8px 10px;
   background: #141310;
   border: 1px solid #2f2b24;
+  animation: script-in 0.28s ease;
+}
+
+@keyframes script-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .md-preview span {

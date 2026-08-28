@@ -32,6 +32,10 @@ from .modes import parse_mode
 from .paths import is_local_model_dir
 
 
+class JobCancelled(Exception):
+    """Raised when a running job is stopped by the user."""
+
+
 def normalize_engine_mode(mode: str | None) -> str:
     return parse_mode(mode, strict=False)
 
@@ -140,6 +144,7 @@ class TTSEngine:
         stable: bool = True,
         temperature: float | None = None,
         progress_cb=None,
+        cancel_check=None,
     ) -> dict:
         mode = normalize_engine_mode(mode)
         self._temperature = TTS_TEMPERATURE if temperature is None else float(temperature)
@@ -220,11 +225,15 @@ class TTSEngine:
 
                 mx.random.seed(TTS_SEED)
             for voice_offset, voice in enumerate(voice_list):
+                if cancel_check:
+                    cancel_check()
                 wavs: list[np.ndarray] = []
                 kind = _voice_kind(voice, mode)
                 sid = str(voice.get("id") or speaker_id)
                 self._load_unlocked(kind)
                 for offset in range(0, len(tts_chunks), batch_size):
+                    if cancel_check:
+                        cancel_check()
                     batch = tts_chunks[offset : offset + batch_size]
                     if kind == "design":
                         collected = self._generate_design_batch(

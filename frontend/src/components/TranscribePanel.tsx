@@ -6,6 +6,8 @@ const ASR_STAGES: Record<string, string> = {
   converting: "转换音频",
   loading: "加载转写模型",
   transcribing: "识别中",
+  cancelling: "正在终止",
+  cancelled: "已终止",
   done: "完成",
   error: "失败",
 };
@@ -21,6 +23,7 @@ export function TranscribePanel({
   onFile,
   onLanguage,
   onTranscribe,
+  onCancel,
   onTextChange,
   onCopy,
   onApplyToScript,
@@ -36,6 +39,7 @@ export function TranscribePanel({
   onFile: (file: File | null) => void;
   onLanguage: (value: string) => void;
   onTranscribe: () => void;
+  onCancel: () => void;
   onTextChange: (value: string) => void;
   onCopy: () => void;
   onApplyToScript: () => void;
@@ -69,13 +73,24 @@ export function TranscribePanel({
               ))}
             </select>
           </label>
-          <button
-            type="button"
-            onClick={onTranscribe}
-            disabled={!asrFile || health?.asr_model_ready === false || asrJob?.status === "queued" || asrJob?.status === "running"}
-          >
-            {asrJob?.status === "queued" || asrJob?.status === "running" ? "转写中…" : "开始转写"}
-          </button>
+          {asrJob?.id && (asrJob.status === "queued" || asrJob.status === "running" || asrJob.status === "cancelling") ? (
+            <button
+              type="button"
+              className="stop"
+              disabled={asrJob.status === "cancelling"}
+              onClick={onCancel}
+            >
+              {asrJob.status === "cancelling" ? "正在终止…" : "终止转写"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onTranscribe}
+              disabled={!asrFile || health?.asr_model_ready === false}
+            >
+              开始转写
+            </button>
+          )}
           {asrJob ? (
             <div className="job">
               <div className="bar">
@@ -86,7 +101,9 @@ export function TranscribePanel({
                   ? `完成 · ${asrJob.segments?.length || 1} 段 · ${asrJob.duration_sec ?? "-"}s · 耗时 ${asrJob.elapsed_sec ?? "-"}s · ${asrJob.language || asrLanguage}`
                   : asrJob.status === "error"
                     ? asrJob.error
-                    : asrJob.chunk && asrJob.chunks
+                    : asrJob.status === "cancelled"
+                      ? "已终止"
+                      : asrJob.chunk && asrJob.chunks
                       ? `识别中 ${asrJob.chunk}/${asrJob.chunks} · ${Math.round((asrJob.progress || 0) * 100)}%`
                       : `${ASR_STAGES[asrJob.stage || asrJob.status || ""] || asrJob.stage || asrJob.status} · ${Math.round((asrJob.progress || 0) * 100)}%`}
               </p>
