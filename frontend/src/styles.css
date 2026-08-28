@@ -311,6 +311,11 @@ body,
   overflow: hidden;
 }
 
+.studio-script .voice-list {
+  max-height: 180px;
+  overflow: auto;
+}
+
 .studio-output .history-fold {
   flex: 0 0 auto;
   border-top: 0;
@@ -867,6 +872,18 @@ label.check input {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.script-save {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.script-save input {
+  flex: 1 1 160px;
+  min-width: 0;
 }
 
 button.mini {

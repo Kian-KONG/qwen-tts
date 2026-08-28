@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import audio_util, voices
+from . import audio_util, scripts, voices
 from .config import (
     API_KEY,
     ASR_MODEL_DIR,
@@ -111,6 +111,18 @@ class SplitRequest(BaseModel):
 
 class VoiceRenameRequest(BaseModel):
     name: str
+
+
+class ScriptCreateRequest(BaseModel):
+    name: str
+    markdown: str
+    language: str = LANGUAGE
+
+
+class ScriptUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    markdown: Optional[str] = None
+    language: Optional[str] = None
 
 
 def _normalize_mode(mode: str | None) -> str:
@@ -320,6 +332,57 @@ async def api_import_script(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"无法读取表格：{exc}") from exc
+
+
+@app.get("/api/scripts")
+def api_scripts():
+    return {"data": scripts.list_scripts()}
+
+
+@app.post("/api/scripts")
+def api_create_script(payload: ScriptCreateRequest):
+    try:
+        return scripts.create_script(
+            payload.name,
+            payload.markdown,
+            _normalize_language(payload.language),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/scripts/{script_id}")
+def api_get_script(script_id: str):
+    try:
+        return scripts.get_script(script_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="找不到这份配音列表")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/api/scripts/{script_id}")
+def api_update_script(script_id: str, payload: ScriptUpdateRequest):
+    language = _normalize_language(payload.language) if payload.language is not None else None
+    try:
+        return scripts.update_script(
+            script_id,
+            name=payload.name,
+            markdown=payload.markdown,
+            language=language,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="找不到这份配音列表")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/scripts/{script_id}")
+def api_delete_script(script_id: str):
+    scripts.delete_script(script_id)
+    return {"ok": True}
 
 
 @app.post("/api/transcribe")

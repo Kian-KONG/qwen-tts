@@ -259,6 +259,57 @@ export async function deleteVoice(id: string): Promise<void> {
   await request(`/api/voices/${id}`, { method: "DELETE" });
 }
 
+export type ScriptList = {
+  id: string;
+  name: string;
+  language?: string;
+  chunks?: number;
+  preview?: string;
+  markdown?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export async function listScripts(): Promise<ScriptList[]> {
+  const res = await request("/api/scripts");
+  const data = await res.json();
+  return data.data ?? [];
+}
+
+export async function getScript(id: string): Promise<ScriptList> {
+  const res = await request(`/api/scripts/${id}`);
+  return res.json();
+}
+
+export async function createScript(opts: {
+  name: string;
+  markdown: string;
+  language: string;
+}): Promise<ScriptList> {
+  const res = await request("/api/scripts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  return res.json();
+}
+
+export async function updateScript(
+  id: string,
+  opts: { name?: string; markdown?: string; language?: string },
+): Promise<ScriptList> {
+  const res = await request(`/api/scripts/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  return res.json();
+}
+
+export async function deleteScript(id: string): Promise<void> {
+  await request(`/api/scripts/${id}`, { method: "DELETE" });
+}
+
 export function withDownload(url: string): string {
   if (!url) return url;
   return url.includes("?") ? `${url}&download=1` : `${url}?download=1`;

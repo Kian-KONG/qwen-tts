@@ -31,6 +31,7 @@ ASR_MODEL_ID = os.getenv(
 )
 ASR_MODEL_DIR = Path(os.getenv("QWEN_ASR_MODEL", ROOT / "models" / "qwen3-asr")).resolve()
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
+SCRIPTS_DIR = Path(os.getenv("QWEN_TTS_SCRIPTS", ROOT / "data" / "scripts")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
 PREVIEW_DIR = Path(os.getenv("QWEN_TTS_PREVIEWS", ROOT / "data" / "previews" / "speakers")).resolve()
 FRONTEND_DIST = ROOT / "frontend" / "dist"
@@ -95,6 +96,7 @@ SPEAKER_PREVIEW = {
 
 for path in (
     VOICES_DIR,
+    SCRIPTS_DIR,
     OUTPUT_DIR,
     PREVIEW_DIR,
     MODEL_DIR.parent,

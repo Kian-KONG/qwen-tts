@@ -53,6 +53,6 @@ source "$ROOT/mlx-tts-env/bin/activate"
   --extra-index-url "$UV_EXTRA_INDEX_URL" \
   -r "$ROOT/backend/requirements.txt"
 
-mkdir -p "$ROOT/models" "$ROOT/data/voices" "$ROOT/data/output"
+mkdir -p "$ROOT/models" "$ROOT/data/voices" "$ROOT/data/scripts" "$ROOT/data/output"
 echo "Setup complete on Apple Silicon / MLX."
 echo "Next: make download"

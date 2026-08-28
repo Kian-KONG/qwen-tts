@@ -2,26 +2,32 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "
 import {
   API_BASE,
   createJob,
+  createScript,
   createTranscribeJob,
   createVoice,
   deleteJob,
+  deleteScript,
   deleteVoice,
   downloadFile,
   fetchSpeakerPreview,
   getHealth,
   getJob,
+  getScript,
   getTranscribeJob,
   importScript,
   listJobs,
   listLanguages,
+  listScripts,
   listSpeakers,
   listVoices,
   renameVoice,
+  updateScript,
   voiceAudioUrl,
   withDownload,
   type Health,
   type Job,
   type Language,
+  type ScriptList,
   type Speaker,
   type Transcript,
   type Voice,
@@ -32,6 +38,7 @@ import { TranscribePanel } from "./components/TranscribePanel";
 import { AppSidebar } from "./components/AppSidebar";
 import { AudioRow } from "./components/AudioRow";
 import { ClipList } from "./components/ClipList";
+import { ScriptLists } from "./components/ScriptLists";
 import { FoldSection } from "./components/FoldSection";
 import { jobNeedsZip, jobFullTrackUrl, jobZipUrl, wavName } from "./lib/jobUtils";
 import { useHashRoute } from "./route";
@@ -246,6 +253,9 @@ export default function App() {
   const [batchSize, setBatchSize] = useState(4);
   const [job, setJob] = useState<Job | null>(null);
   const [history, setHistory] = useState<Job[]>([]);
+  const [scripts, setScripts] = useState<ScriptList[]>([]);
+  const [activeScriptId, setActiveScriptId] = useState("");
+  const [scriptName, setScriptName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -290,16 +300,19 @@ export default function App() {
 
   async function refresh() {
     try {
-      const [nextHealth, nextVoices, nextLanguages, nextSpeakers] = await Promise.all([
+      const [nextHealth, nextVoices, nextLanguages, nextSpeakers, nextScripts] = await Promise.all([
         getHealth(),
         listVoices(),
         listLanguages(),
         listSpeakers(),
+        listScripts().catch(() => []),
       ]);
       setHealth(nextHealth);
       setVoices(nextVoices);
       setLanguages(nextLanguages);
       setSpeakers(nextSpeakers.data);
+      setScripts(nextScripts);
+      setActiveScriptId((current) => (current && nextScripts.some((item) => item.id === current) ? current : ""));
       setSelectedSpeakers((current) => current.filter((id) => nextSpeakers.data.some((item) => item.id === id)));
       setSelectedVoiceIds((current) => current.filter((id) => nextVoices.some((item) => item.id === id)));
       setVoiceId((current) => {
@@ -440,9 +453,83 @@ export default function App() {
       const result = await importScript(file);
       setMarkdown(result.markdown);
       setExcelName(file.name);
+      setActiveScriptId("");
       setMessage(`已从表格导入 ${result.count} 段，每个单元格一段`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "导入失败");
+    }
+  }
+
+  async function onSaveScript() {
+    const name = scriptName.trim();
+    if (!name || !markdown.trim()) {
+      setMessage("请填写列表名称和文稿");
+      return;
+    }
+    try {
+      const saved = await createScript({ name, markdown, language });
+      setScripts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setActiveScriptId(saved.id);
+      setScriptName(saved.name);
+      setMessage(`已保存列表「${saved.name}」· ${saved.chunks || filledSegments.length} 段`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存失败");
+    }
+  }
+
+  async function onUpdateScript() {
+    if (!activeScriptId) return;
+    if (!markdown.trim()) {
+      setMessage("文稿是空的");
+      return;
+    }
+    try {
+      const saved = await updateScript(activeScriptId, {
+        name: scriptName.trim() || undefined,
+        markdown,
+        language,
+      });
+      setScripts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setScriptName(saved.name);
+      setMessage(`已更新「${saved.name}」`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "更新失败");
+    }
+  }
+
+  async function onLoadScript(id: string) {
+    try {
+      const item = await getScript(id);
+      setMarkdown(item.markdown || "");
+      setActiveScriptId(item.id);
+      setScriptName(item.name);
+      if (item.language) setLanguage(item.language);
+      setMessage(`已载入「${item.name}」· ${item.chunks || 0} 段`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "载入失败");
+    }
+  }
+
+  async function onRenameScript(id: string, name: string) {
+    try {
+      const saved = await updateScript(id, { name });
+      setScripts((current) => current.map((item) => (item.id === id ? { ...item, ...saved, markdown: undefined } : item)));
+      if (activeScriptId === id) setScriptName(saved.name);
+      setMessage(`已重命名为 ${saved.name}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "重命名失败");
+    }
+  }
+
+  async function onDeleteScript(id: string, name: string) {
+    if (!window.confirm(`删除配音列表「${name}」？文稿会从本机去掉。`)) return;
+    try {
+      await deleteScript(id);
+      setScripts((current) => current.filter((item) => item.id !== id));
+      if (activeScriptId === id) setActiveScriptId("");
+      setMessage(`已删除 ${name}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除失败");
     }
   }
 
@@ -1248,6 +1335,19 @@ export default function App() {
             <h2>文稿</h2>
             <span>{filledSegments.length} 段</span>
           </header>
+          <ScriptLists
+            scripts={scripts}
+            activeId={activeScriptId}
+            name={scriptName}
+            languages={languages}
+            canSave={Boolean(markdown.trim())}
+            onName={setScriptName}
+            onSave={() => void onSaveScript()}
+            onUpdate={() => void onUpdateScript()}
+            onLoad={(id) => void onLoadScript(id)}
+            onRename={(id, name) => void onRenameScript(id, name)}
+            onDelete={(id, name) => void onDeleteScript(id, name)}
+          />
           <form className="stack studio-form" onSubmit={onGenerate}>
             <div className="script-controls">
               <label>

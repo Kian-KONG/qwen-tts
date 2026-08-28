@@ -17,6 +17,9 @@ data/previews/**
 data/voices/*
 !data/voices/.gitkeep
 !data/voices/README.md
+data/scripts/*
+!data/scripts/.gitkeep
+!data/scripts/README.md
 *.wav
 *.mp3
 *.flac
