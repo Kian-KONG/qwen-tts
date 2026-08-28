@@ -271,9 +271,7 @@ class TTSEngine:
                 label = (script_name or "").strip() or "文稿"
                 for chunk, wav in zip(chunks, wavs):
                     clip_index += 1
-                    filename = audio_util.unique_wav_name(
-                        segment_dir, chunk, voice_name, used_names, created_at
-                    )
+                    filename = audio_util.unique_wav_name(segment_dir, chunk, voice_name, used_names)
                     raw_path = segment_dir / f".seg_{clip_index:03d}.raw.wav"
                     out_seg = segment_dir / filename
                     audio_util.write_wav(raw_path, wav, native_sr)
