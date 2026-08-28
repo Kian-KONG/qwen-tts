@@ -34,7 +34,7 @@ export function ScriptLists({
   onRename: (id: string, name: string) => void;
   onDelete: (id: string, name: string) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const active = scripts.find((item) => item.id === activeId);
@@ -65,7 +65,7 @@ export function ScriptLists({
       open={open}
       onToggle={() => setOpen((current) => !current)}
     >
-      <p className="hint">保存当前编号文稿，下次点「载入」会整份替换下面的列表。保存在本机 data/scripts/。</p>
+      <p className="hint">保存当前编号文稿；载入会替换下面的列表。保存在本机 data/scripts/。</p>
       <div className="script-save">
         <input
           value={name}

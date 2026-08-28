@@ -48,6 +48,9 @@ def _public_segments(job_id: str, raw: list[dict]) -> list[dict]:
                 "filename": item.get("filename"),
                 "duration_sec": item.get("duration_sec"),
                 "url": f"/api/jobs/{job_id}/segments/{index}/audio",
+                "asr_text": item.get("asr_text") or None,
+                "match": item.get("match"),
+                "retaken": bool(item.get("retaken")),
             }
         )
     return segments
@@ -113,6 +116,8 @@ def to_public_job(
         "download_url": f"/api/jobs/{job_id}/audio" if download else None,
         "zip_url": zip_url,
         "local_dir": local_dir if local_dir is not None else (f"data/output/{job_id}" if download else None),
+        "stage": payload.get("stage"),
+        "verify": payload.get("verify"),
         **payload,
         "segments": segments,
         "tracks": tracks,
@@ -127,6 +132,10 @@ def to_public_job(
 
 def public_from_job(job: Any) -> dict:
     done = job.status == "done"
+    stats = dict(job.stats or {})
+    stage = getattr(job, "stage", "") or stats.get("stage")
+    if stage:
+        stats["stage"] = stage
     return to_public_job(
         job_id=job.id,
         status=job.status,
@@ -135,7 +144,7 @@ def public_from_job(job: Any) -> dict:
         created_at=job.created_at,
         text=job.text or "",
         voices=getattr(job, "voices", None) or [],
-        stats=dict(job.stats or {}),
+        stats=stats,
         download=done,
         zip_if_segments=True,
         script_name=getattr(job, "script_name", "") or "",
@@ -162,6 +171,8 @@ def public_from_record(record: dict, *, full_exists: bool, inferred_segments: li
             "audio_sec",
             "rtf",
             "tracks",
+            "verify",
+            "stage",
         )
         if key in record
     }

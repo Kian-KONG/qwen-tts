@@ -37,7 +37,7 @@ import {
 import { FileField } from "./components/FileField";
 import { TempSlider } from "./components/TempSlider";
 import { TranscribePanel } from "./components/TranscribePanel";
-import { AppSidebar } from "./components/AppSidebar";
+import { AppSidebar, ThemeGlyph, type ThemeName } from "./components/AppSidebar";
 import { AudioRow } from "./components/AudioRow";
 import { ClipList } from "./components/ClipList";
 import { ScriptLists, type ScriptPending } from "./components/ScriptLists";
@@ -133,8 +133,11 @@ const SPEAKERS_KEY = "qwen-tts-speakers";
 const DESIGNS_KEY = "qwen-tts-designs";
 const JOB_ID_KEY = "qwen-tts-job-id";
 const SIDEBAR_KEY = "qwen-tts-sidebar";
+const THEME_KEY = "qwen-tts-theme";
 const VOICE_FOLD_KEY = "qwen-tts-voice-fold";
 const HISTORY_FOLD_KEY = "qwen-tts-history-fold";
+const PREVIEW_FOLD_KEY = "qwen-tts-preview-fold";
+const VOICES_COLLAPSE_KEY = "qwen-tts-voices-collapsed";
 
 const MODE_LABEL: Record<string, string> = {
   preset: "预设",
@@ -151,6 +154,28 @@ const JOB_STATUS: Record<string, string> = {
   error: "失败",
 };
 
+const JOB_STAGE: Record<string, string> = {
+  tts: "生成中",
+  asr: "ASR 校对中",
+  retake: "校对重配中",
+  done: "完成",
+};
+
+function jobPhaseLabel(job?: { status?: string; stage?: string | null } | null) {
+  if (!job?.status) return "";
+  if (job.status === "running") return JOB_STAGE[job.stage || ""] || "生成中";
+  return JOB_STATUS[job.status] || job.status;
+}
+
+function verifySummary(job?: Pick<Job, "verify"> | null) {
+  const verify = job?.verify;
+  if (!verify?.enabled) return "";
+  if (verify.skipped) return verify.reason ? `校对跳过（${verify.reason}）` : "校对跳过";
+  if (verify.retaken) return `重配 ${verify.retaken} 段`;
+  if (verify.checked) return "校对通过";
+  return "";
+}
+
 function jobActive(status?: string) {
   return status === "queued" || status === "running" || status === "cancelling";
 }
@@ -166,6 +191,14 @@ type VoiceFold = "preset" | "design" | "clone";
 function storedVoiceFold(): VoiceFold {
   const value = stored(VOICE_FOLD_KEY, "preset");
   return value === "design" || value === "clone" ? value : "preset";
+}
+
+function storedTheme(): ThemeName {
+  return stored(THEME_KEY, "dark") === "light" ? "light" : "dark";
+}
+
+function applyTheme(theme: ThemeName) {
+  document.documentElement.dataset.theme = theme;
 }
 
 function stored(key: string, fallback: string): string {
@@ -208,10 +241,17 @@ function storedJson<T>(key: string, fallback: T): T {
 export default function App() {
   const [route, go] = useHashRoute();
   const [railCollapsed, setRailCollapsed] = useState(() => stored(SIDEBAR_KEY, "0") === "1");
+  const [theme, setTheme] = useState<ThemeName>(() => {
+    const next = storedTheme();
+    applyTheme(next);
+    return next;
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [voiceFold, setVoiceFold] = useState<VoiceFold>(storedVoiceFold);
   const [cloneStudioOpen, setCloneStudioOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(() => stored(HISTORY_FOLD_KEY, "1") !== "0");
+  const [previewOpen, setPreviewOpen] = useState(() => stored(PREVIEW_FOLD_KEY, "0") === "1");
+  const [voicesCollapsed, setVoicesCollapsed] = useState(() => stored(VOICES_COLLAPSE_KEY, "0") === "1");
   const [health, setHealth] = useState<Health | null>(null);
   const [languages, setLanguages] = useState<Language[]>([]);
   const [language, setLanguage] = useState("Auto");
@@ -233,6 +273,7 @@ export default function App() {
   const [instruct, setInstruct] = useState(VOICE_PRESETS[0].text);
   const [styleInstruct, setStyleInstruct] = useState("");
   const [stableDub, setStableDub] = useState(true);
+  const [verifyAsr, setVerifyAsr] = useState(false);
   const [temperature, setTemperature] = useState(0.3);
   const [refFile, setRefFile] = useState<File | null>(null);
   const [refText, setRefText] = useState(CLONE_PROMPT);
@@ -384,12 +425,15 @@ export default function App() {
       window.localStorage.setItem(VOICE_IDS_KEY, selectedVoiceIds.join(","));
       window.localStorage.setItem(DESIGNS_KEY, JSON.stringify(designs));
       window.localStorage.setItem(SIDEBAR_KEY, railCollapsed ? "1" : "0");
+      window.localStorage.setItem(THEME_KEY, theme);
       window.localStorage.setItem(VOICE_FOLD_KEY, voiceFold);
       window.localStorage.setItem(HISTORY_FOLD_KEY, historyOpen ? "1" : "0");
+      window.localStorage.setItem(PREVIEW_FOLD_KEY, previewOpen ? "1" : "0");
+      window.localStorage.setItem(VOICES_COLLAPSE_KEY, voicesCollapsed ? "1" : "0");
     } catch {
       /* ignore quota / private mode */
     }
-  }, [voiceId, selectedSpeakers, selectedVoiceIds, designs, railCollapsed, voiceFold, historyOpen]);
+  }, [voiceId, selectedSpeakers, selectedVoiceIds, designs, railCollapsed, theme, voiceFold, historyOpen, previewOpen, voicesCollapsed]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error" || job.status === "cancelled") return;
@@ -850,6 +894,7 @@ export default function App() {
         styleInstruct: styleInstruct || undefined,
         stable: stableDub,
         temperature,
+        verifyAsr,
         voiceIds: selectedVoiceIds.length ? selectedVoiceIds : undefined,
         refAudio: pendingClone ? refFile || undefined : undefined,
         refText: pendingClone ? refText : undefined,
@@ -1082,6 +1127,19 @@ export default function App() {
       .join(" · ");
   }
 
+  function toggleTheme() {
+    setTheme((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      applyTheme(next);
+      return next;
+    });
+  }
+
+  function toggleVoicesCollapsed() {
+    if (recStatus === "recording") return;
+    setVoicesCollapsed((current) => !current);
+  }
+
   function goRoute(next: typeof route) {
     go(next);
     setDrawerOpen(false);
@@ -1113,8 +1171,10 @@ export default function App() {
       <AppSidebar
         route={route}
         collapsed={railCollapsed}
+        theme={theme}
         onGo={goRoute}
         onToggle={() => setRailCollapsed((open) => !open)}
+        onTheme={toggleTheme}
       />
       <div className="workspace">
         <header className="app-bar">
@@ -1132,6 +1192,15 @@ export default function App() {
             <strong>{route === "transcribe" ? "转写" : "配音"}</strong>
             <span>{route === "transcribe" ? "语音转文字，结果可填回配音页" : "音色、文稿、成片并排工作"}</span>
           </div>
+          <button
+            type="button"
+            className="theme-btn"
+            onClick={toggleTheme}
+            title={theme === "dark" ? "切换到亮色" : "切换到暗色"}
+            aria-label={theme === "dark" ? "切换到亮色主题" : "切换到暗色主题"}
+          >
+            <ThemeGlyph theme={theme} />
+          </button>
           <div className="status">
             <span className={health?.model_loaded || health?.model_dir_ready ? "dot on" : "dot"} />
             <div>
@@ -1161,12 +1230,28 @@ export default function App() {
         onApplyToClone={applyAsrToClone}
       />
       ) : (
-      <div className="studio">
+      <div className={`studio${voicesCollapsed ? " voices-collapsed" : ""}`}>
       <section className="panel studio-voices">
-        <header className="panel-head">
+        <button
+          type="button"
+          className="panel-head voices-head"
+          onClick={toggleVoicesCollapsed}
+          aria-expanded={!voicesCollapsed}
+          title={
+            recStatus === "recording"
+              ? "录音中，先停止再折叠"
+              : voicesCollapsed
+                ? "展开音色"
+                : "折叠音色"
+          }
+        >
           <h2>音色</h2>
           <span>{voiceCount} 个已选</span>
-        </header>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+        <div className="voices-body" inert={voicesCollapsed || undefined}>
           <audio
             ref={voicePlayerRef}
             className="voice-player"
@@ -1438,6 +1523,7 @@ export default function App() {
           </FoldSection>
             </>
           )}
+        </div>
         </section>
 
         <section className="panel studio-script">
@@ -1495,27 +1581,30 @@ export default function App() {
                   </button>
                 </div>
               </label>
+              <div className="script-checks">
+                <label className="check">
+                  <input type="checkbox" checked={stableDub} onChange={(e) => setStableDub(e.target.checked)} />
+                  稳定配音
+                </label>
+                <label className="check" title={health?.asr_model_ready ? "配完用转写听一遍，对不上的句子再配一次" : "需要先下载 ASR"}>
+                  <input
+                    type="checkbox"
+                    checked={verifyAsr}
+                    disabled={health?.asr_model_ready === false}
+                    onChange={(e) => setVerifyAsr(e.target.checked)}
+                  />
+                  ASR 校对一轮
+                </label>
+              </div>
+              <TempSlider value={temperature} onChange={setTemperature} />
             </div>
-            <label className="check">
-              <input type="checkbox" checked={stableDub} onChange={(e) => setStableDub(e.target.checked)} />
-              稳定配音
-            </label>
-            <TempSlider value={temperature} onChange={setTemperature} />
-            <p className="hint">
-              {stableDub
-                ? "低温采样、短句统一句号、剪掉头尾静音，相近字数会轻微拉齐时长。关闭则恢复模型自由发挥。"
-                : "已关闭稳定配音，短句语气和时长会更随性。温度仍按上面的 temp 生效。"}
+            <p className="hint hint-compact">
+              {verifyAsr
+                ? "配完会切到转写模型听一遍，对不上的句子再配一次。时间会更长。"
+                : stableDub
+                ? "Markdown 一项一段。zip 包名是列表名 + 音色 + 时间；里面每段是「文稿 - 音色.wav」，同一句重配会覆盖。"
+                : "已关闭稳定配音，短句语气和时长会更随性。一项一段；zip 内文件名不含时间，重配同句会覆盖。"}
             </p>
-            <p className="hint">
-              用 Markdown 有序列表编辑：`1.` `2.` `3.` 一项一段短音频，不会连读成一条。zip 是「列表名 - 音色 - 时间」；里面每段是「这句文稿 - 音色.wav」，同一句抽卡重配就能直接盖掉。也可以导入 Excel / CSV，每个非空单元格就是一段。
-            </p>
-            <FileField
-              label="导入 Excel / CSV"
-              accept=".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-              emptyText={excelName || "xlsx / csv，每个单元格一段"}
-              buttonText="导入表格"
-              onChange={(file) => void onImportScript(file)}
-            />
             <div
               className={`markdown-wrap${scriptPending?.action === "load" && activeScriptId !== scriptPending.id ? " is-loading" : ""}`}
             >
@@ -1538,14 +1627,6 @@ export default function App() {
                 </div>
               ) : null}
             </div>
-            <ol className="md-preview" key={`preview-${editorRev}`}>
-              {filledSegments.map((item, index) => (
-                <li key={`${index}-${item.slice(0, 24)}`}>
-                  <span>{index + 1}.</span>
-                  <p>{item}</p>
-                </li>
-              ))}
-            </ol>
             <div className="row meta">
               <button type="button" className="ghost" onClick={addSegment}>
                 添加一项
@@ -1553,8 +1634,31 @@ export default function App() {
               <button type="button" className="ghost" onClick={tidyNumbers}>
                 整理编号
               </button>
+              <FileField
+                label=""
+                accept=".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                emptyText={excelName || "导入 Excel / CSV"}
+                buttonText="导入表格"
+                onChange={(file) => void onImportScript(file)}
+              />
               <span>{filledSegments.length} 段</span>
             </div>
+            <FoldSection
+              title="分段预览"
+              badge={`${filledSegments.length} 段`}
+              open={previewOpen}
+              onToggle={() => setPreviewOpen((current) => !current)}
+              className="preview-fold"
+            >
+              <ol className="md-preview" key={`preview-${editorRev}`}>
+                {filledSegments.map((item, index) => (
+                  <li key={`${index}-${item.slice(0, 24)}`}>
+                    <span>{index + 1}.</span>
+                    <p>{item}</p>
+                  </li>
+                ))}
+              </ol>
+            </FoldSection>
             {jobActive(job?.status) ? (
               <button
                 type="button"
@@ -1593,8 +1697,8 @@ export default function App() {
         </header>
         <p className="hint">
           {API_BASE
-            ? "成片在 Mac 的 data/output/。zip 是列表名 + 音色 + 时间；里面每段是「文稿 - 音色.wav」，同一句重配即可覆盖。"
-            : "zip 包名是「列表名 - 音色 - 时间」；里面分段是「文稿 - 音色.wav」，同一句重配就能盖掉。整轨按编号拼接。试听 16-bit，下载 24-bit。"}
+            ? "成片在 Mac 的 data/output/。zip：列表名 + 音色 + 时间；里面每段「文稿 - 音色.wav」，同句重配即覆盖。"
+            : "zip 包名是列表名 + 音色 + 时间；分段是「文稿 - 音色.wav」，同句重配会覆盖。整轨按编号拼接。试听 16-bit，下载 24-bit。"}
         </p>
         {history.length ? (
           <FoldSection
@@ -1661,12 +1765,14 @@ export default function App() {
               {job.status === "done"
                 ? `完成 · ${job.chunks || job.segments?.length || 0} 段${
                     job.speakers && job.speakers.length > 1 ? ` × ${job.speakers.length} 音色` : ""
-                  } · ${job.audio_sec}s · 耗时 ${job.elapsed_sec}s · RTF ${job.rtf}`
+                  } · ${job.audio_sec}s · 耗时 ${job.elapsed_sec}s · RTF ${job.rtf}${
+                    verifySummary(job) ? ` · ${verifySummary(job)}` : ""
+                  }`
                 : job.status === "error"
                   ? job.error
                   : job.status === "cancelled"
                     ? "已终止"
-                    : `${JOB_STATUS[job.status] || job.status} · ${Math.round((job.progress || 0) * 100)}%`}
+                    : `${jobPhaseLabel(job)} · ${Math.round((job.progress || 0) * 100)}%`}
             </p>
             {jobActive(job.status) ? (
               <button

@@ -32,6 +32,8 @@ class Job:
     stable: bool = True
     temperature: float = 0.3
     script_name: str = ""
+    verify_asr: bool = False
+    stage: str = ""
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
 
 
@@ -95,13 +97,20 @@ class JobRunner:
                 continue
             job.status = "running"
             try:
+                job.stage = "tts"
+                job.stats["stage"] = "tts"
+                tts_scale = 0.55 if job.verify_asr else 1.0
 
-                def on_progress(value: float, current=job) -> None:
-                    current.progress = round(value, 3)
+                def on_progress(value: float, current=job, scale=tts_scale) -> None:
+                    current.progress = round(min(1.0, value * scale), 3)
 
                 def cancel_check(current=job) -> None:
                     if current.cancel_event.is_set():
                         raise JobCancelled("已终止")
+
+                def set_stage(name: str, current=job) -> None:
+                    current.stage = name
+                    current.stats["stage"] = name
 
                 job.stats = engine.synthesize(
                     job.text,
@@ -123,7 +132,27 @@ class JobRunner:
                 )
                 if job.cancel_event.is_set():
                     raise JobCancelled("已终止")
+                if job.verify_asr:
+                    from .verify import run_verify_round
+
+                    job.stage = "asr"
+                    job.stats["stage"] = "asr"
+                    job.progress = 0.55
+                    job.stats = run_verify_round(
+                        stats=job.stats,
+                        voices=job.voices or [],
+                        language=job.language,
+                        stable=job.stable,
+                        temperature=job.temperature,
+                        script_name=job.script_name,
+                        created_at=job.created_at,
+                        progress_cb=lambda value, current=job: setattr(current, "progress", round(value, 3)),
+                        stage_cb=set_stage,
+                        cancel_check=cancel_check,
+                    )
                 job.progress = 1.0
+                job.stage = "done"
+                job.stats["stage"] = "done"
                 job.status = "done"
                 try:
                     persist_job(job)

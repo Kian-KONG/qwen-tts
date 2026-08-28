@@ -25,6 +25,18 @@ export type JobSegment = {
   filename?: string | null;
   duration_sec?: number | null;
   url: string;
+  asr_text?: string | null;
+  match?: boolean | null;
+  retaken?: boolean;
+};
+
+export type JobVerify = {
+  enabled?: boolean;
+  checked?: number;
+  mismatched?: number;
+  retaken?: number;
+  skipped?: boolean;
+  reason?: string;
 };
 
 export type JobTrack = {
@@ -60,6 +72,8 @@ export type Job = {
   elapsed_sec?: number;
   audio_sec?: number;
   rtf?: number | null;
+  stage?: string | null;
+  verify?: JobVerify | null;
 };
 
 export type Speaker = {
@@ -358,6 +372,7 @@ export async function createJob(opts: {
   stable?: boolean;
   temperature?: number;
   scriptName?: string;
+  verifyAsr?: boolean;
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
@@ -377,6 +392,7 @@ export async function createJob(opts: {
   if (opts.refAudio) body.set("ref_audio", opts.refAudio);
   if (opts.refText) body.set("ref_text", opts.refText);
   if (opts.scriptName) body.set("script_name", opts.scriptName);
+  body.set("verify_asr", opts.verifyAsr ? "true" : "false");
   const res = await request("/api/jobs", { method: "POST", body });
   return withJobUrls(await res.json());
 }

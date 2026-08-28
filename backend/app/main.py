@@ -216,6 +216,7 @@ class JobRequest(BaseModel):
     stable: bool = True
     temperature: float = Field(default=TTS_TEMPERATURE, ge=0.05, le=1.5)
     script_name: Optional[str] = None
+    verify_asr: bool = False
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -519,6 +520,7 @@ async def api_create_job(
     temperature: Optional[str] = Form(None),
     script_name: Optional[str] = Form(None),
     title: Optional[str] = Form(None),
+    verify_asr: Optional[str] = Form("false"),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
@@ -565,6 +567,7 @@ async def api_create_job(
             stable=_form_flag(stable, True),
             temperature=_form_float(temperature, TTS_TEMPERATURE),
             script_name=(script_name or title or "").strip() or "文稿",
+            verify_asr=_form_flag(verify_asr, False),
         )
         return public_job(job)
     except KeyError:
@@ -609,6 +612,7 @@ def api_create_job_json(payload: JobRequest):
         stable=payload.stable,
         temperature=payload.temperature,
         script_name=(payload.script_name or "").strip() or "文稿",
+        verify_asr=payload.verify_asr,
     )
     return public_job(job)
 

@@ -464,6 +464,90 @@ class TTSEngine:
             )
         return collected
 
+    def retake_segments(
+        self,
+        *,
+        stats: dict,
+        voices: list[dict],
+        mismatches: list[dict],
+        language: str,
+        stable: bool,
+        temperature: float,
+        script_name: str = "",
+        created_at: str | None = None,
+        progress_cb=None,
+        cancel_check=None,
+    ) -> None:
+        if not mismatches:
+            return
+        previous_temp = self._temperature
+        self._temperature = min(1.5, float(temperature) + 0.08)
+        lang = LANGUAGE_BY_ID.get(language, LANGUAGE_BY_ID["Auto"])
+        lang_code = lang["lang_code"]
+        voice_by_id = {str(item.get("id") or ""): item for item in voices}
+        voice_by_name = {str(item.get("name") or ""): item for item in voices}
+        grouped: dict[str, list[dict]] = {}
+        for segment in mismatches:
+            key = str(segment.get("voice_id") or segment.get("voice") or "")
+            grouped.setdefault(key, []).append(segment)
+        total = max(len(mismatches), 1)
+        done = 0
+        try:
+            with self.lock:
+                import mlx.core as mx
+
+                for key, items in grouped.items():
+                    voice = voice_by_id.get(key) or voice_by_name.get(key)
+                    if not voice:
+                        continue
+                    kind = _voice_kind(voice)
+                    sid = str(voice.get("id") or "")
+                    self._load_unlocked(kind)
+                    for segment in items:
+                        if cancel_check:
+                            cancel_check()
+                        mx.random.seed(TTS_SEED + 100 + int(segment.get("index") or 0))
+                        text = str(segment.get("text") or "")
+                        spoken = audio_util.normalize_tts_text(text) if stable else text
+                        batch = [spoken]
+                        if kind == "design":
+                            collected = self._generate_design_batch(
+                                batch, str(voice.get("instruct") or ""), lang_code, stable=stable
+                            )
+                        elif kind == "preset":
+                            collected = self._generate_preset_batch(
+                                batch, sid, lang_code, str(voice.get("style") or ""), stable=stable
+                            )
+                        else:
+                            collected = self._generate_batch(
+                                batch,
+                                str(voice.get("ref_audio") or ""),
+                                str(voice.get("ref_text") or ""),
+                                lang_code,
+                                stable=stable,
+                            )
+                        if 0 not in collected:
+                            done += 1
+                            if progress_cb:
+                                progress_cb(done / total)
+                            continue
+                        audio, rate = collected[0]
+                        wav = audio_util.to_float32(audio)
+                        dest = Path(str(segment.get("path") or ""))
+                        if not dest.parent.exists():
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                        raw_path = dest.parent / f".retake_{segment.get('index')}.raw.wav"
+                        audio_util.write_wav(raw_path, wav, rate)
+                        audio_util.resample_for_video(raw_path, dest)
+                        raw_path.unlink(missing_ok=True)
+                        segment["duration_sec"] = round(float(wav.size) / float(rate), 2) if rate else 0.0
+                        segment["retaken"] = True
+                        done += 1
+                        if progress_cb:
+                            progress_cb(done / total)
+        finally:
+            self._temperature = previous_temp
+
 
 def _collect(results, sample_rate: int) -> dict[int, tuple[np.ndarray, int]]:
     collected: dict[int, tuple[np.ndarray, int]] = {}
