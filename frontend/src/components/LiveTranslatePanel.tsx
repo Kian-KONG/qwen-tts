@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import {
   sendLiveTranslateChunk,
   startLiveTranslate,
@@ -7,19 +8,18 @@ import {
   type Language,
   type LiveTranslateLine,
 } from "../api";
+import { LIVE_CAPTION_CHANNEL, isCaptionEvent } from "../liveCaptions";
+import {
+  canDocumentPip,
+  captureAudio,
+  copyDocumentChrome,
+  listAudioInputs,
+  recorderFormat,
+  type CaptureSource,
+} from "../liveMedia";
+import { LiveCaptionOverlay } from "./LiveCaptionOverlay";
 
 const SLICE_MS = 2500;
-
-function recorderFormat(): { mime: string; ext: string } {
-  const options = [
-    { mime: "audio/webm;codecs=opus", ext: "webm" },
-    { mime: "audio/webm", ext: "webm" },
-    { mime: "audio/mp4", ext: "m4a" },
-    { mime: "audio/ogg;codecs=opus", ext: "ogg" },
-  ];
-  if (typeof MediaRecorder === "undefined") return { mime: "", ext: "webm" };
-  return options.find((item) => MediaRecorder.isTypeSupported(item.mime)) || { mime: "", ext: "webm" };
-}
 
 export function LiveTranslatePanel({
   health,
@@ -30,6 +30,9 @@ export function LiveTranslatePanel({
 }) {
   const [sourceLanguage, setSourceLanguage] = useState("Auto");
   const [targetLanguage, setTargetLanguage] = useState("English");
+  const [captureSource, setCaptureSource] = useState<CaptureSource>("mic");
+  const [deviceId, setDeviceId] = useState("");
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -41,16 +44,67 @@ export function LiveTranslatePanel({
   const queueRef = useRef<Blob[]>([]);
   const sendingRef = useRef(false);
   const runningRef = useRef(false);
+  const busyRef = useRef(false);
+  const linesRef = useRef<LiveTranslateLine[]>([]);
   const startGenRef = useRef(0);
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  const pipRootRef = useRef<Root | null>(null);
+  const pipWinRef = useRef<Window | null>(null);
   const format = recorderFormat();
   const targets = languages.filter((item) => item.id !== "Auto");
   const ready = health?.asr_model_ready !== false && health?.instruct_model_ready !== false;
+  const deviceReady = captureSource !== "device" || Boolean(deviceId);
 
   useEffect(() => {
     return () => {
       void halt();
+      closePip();
     };
   }, []);
+
+  useEffect(() => {
+    const channel = new BroadcastChannel(LIVE_CAPTION_CHANNEL);
+    channelRef.current = channel;
+    channel.onmessage = (event) => {
+      if (!isCaptionEvent(event.data)) return;
+      if (event.data.type === "hello") {
+        channel.postMessage({
+          type: "state",
+          lines: linesRef.current,
+          running: runningRef.current,
+          busy: busyRef.current,
+        });
+      }
+      if (event.data.type === "halt") void halt();
+    };
+    return () => {
+      channel.close();
+      channelRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    linesRef.current = lines;
+    runningRef.current = running;
+    busyRef.current = busy;
+    channelRef.current?.postMessage({ type: "state", lines, running, busy });
+    pipRootRef.current?.render(
+      <LiveCaptionOverlay lines={lines} running={running} busy={busy} onStop={() => void halt()} />,
+    );
+  }, [lines, running, busy]);
+
+  useEffect(() => {
+    if (captureSource !== "device") return;
+    void refreshDevices();
+  }, [captureSource]);
+
+  async function refreshDevices() {
+    try {
+      setDevices(await listAudioInputs());
+    } catch {
+      setDevices([]);
+    }
+  }
 
   async function flush() {
     if (sendingRef.current || !queueRef.current.length || !runningRef.current) return;
@@ -76,6 +130,13 @@ export function LiveTranslatePanel({
     }
   }
 
+  function closePip() {
+    pipRootRef.current?.unmount();
+    pipRootRef.current = null;
+    pipWinRef.current?.close();
+    pipWinRef.current = null;
+  }
+
   async function halt() {
     startGenRef.current += 1;
     runningRef.current = false;
@@ -95,16 +156,18 @@ export function LiveTranslatePanel({
   }
 
   async function onStart() {
-    if (!ready || starting || running) return;
+    if (!ready || starting || running || !deviceReady) return;
     const gen = startGenRef.current;
     setStarting(true);
     setError("");
+    let stream: MediaStream | null = null;
     try {
+      stream = await captureAudio(captureSource, deviceId);
+      if (startGenRef.current !== gen) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       await startLiveTranslate(sourceLanguage, targetLanguage);
-      if (startGenRef.current !== gen) return;
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      });
       if (startGenRef.current !== gen) {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -118,18 +181,59 @@ export function LiveTranslatePanel({
           void flush();
         }
       };
-      recorder.onerror = () => setError("麦克风录音失败");
+      recorder.onerror = () => setError("录音失败");
+      stream.getAudioTracks().forEach((track) => {
+        track.onended = () => void halt();
+      });
       streamRef.current = stream;
       recorderRef.current = recorder;
       runningRef.current = true;
       recorder.start(SLICE_MS);
       setRunning(true);
     } catch (err) {
+      stream?.getTracks().forEach((track) => track.stop());
       await halt();
       setError(err instanceof Error ? err.message : "无法开始实时翻译");
     } finally {
       setStarting(false);
     }
+  }
+
+  async function onPop() {
+    if (canDocumentPip()) {
+      try {
+        if (pipWinRef.current && !pipWinRef.current.closed) {
+          pipWinRef.current.focus();
+          return;
+        }
+        const pip = await window.documentPictureInPicture!.requestWindow({ width: 480, height: 280 });
+        copyDocumentChrome(pip.document);
+        pip.document.body.className = "live-pip-body";
+        const mount = pip.document.createElement("div");
+        pip.document.body.appendChild(mount);
+        const root = createRoot(mount);
+        pipRootRef.current = root;
+        pipWinRef.current = pip;
+        root.render(
+          <LiveCaptionOverlay lines={lines} running={running} busy={busy} onStop={() => void halt()} />,
+        );
+        pip.addEventListener("pagehide", () => {
+          root.unmount();
+          if (pipRootRef.current === root) pipRootRef.current = null;
+          if (pipWinRef.current === pip) pipWinRef.current = null;
+        });
+        return;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "NotAllowedError") {
+          setError("浏览器拒绝了置顶小窗");
+          return;
+        }
+      }
+    }
+    const url = new URL(window.location.href);
+    url.hash = "#/captions";
+    const popup = window.open(url.toString(), "qwen-captions", "popup=yes,width=480,height=320");
+    if (!popup) setError("浏览器拦截了弹窗，请允许后重试");
   }
 
   async function onCopy() {
@@ -146,6 +250,13 @@ export function LiveTranslatePanel({
     }
   }
 
+  const captureHint =
+    captureSource === "share"
+      ? "开始后选择会议所在标签页，并勾选分享音频。不要同时开麦。"
+      : captureSource === "device"
+        ? "把会议输出接到 BlackHole 或多输出设备（扬声器 + 虚拟设备），再选那个输入。不要同时开麦。"
+        : "对着麦克风说话，每隔几秒出一列原文和译文。网页会议用共享标签页音频；桌面会议用虚拟输入。";
+
   return (
     <section className="live-workspace">
       <div className="panel live-side">
@@ -153,11 +264,41 @@ export function LiveTranslatePanel({
           <h2>实时翻译</h2>
         </header>
         <p className="hint">
-          对着麦克风说话，每隔几秒出一列原文和译文。不接配音队列。第一次会卸掉 TTS，同时加载转写和翻译模型。
+          {captureHint} 不接配音队列。第一次会卸掉 TTS，同时加载转写和翻译模型。
           {health?.asr_model_ready === false ? " 请先运行 `make download-asr`。" : ""}
           {health?.instruct_model_ready === false ? " 请先运行 `make download-instruct`。" : ""}
         </p>
         <div className="stack">
+          <label>
+            音频来源
+            <select
+              value={captureSource}
+              disabled={running || starting}
+              onChange={(e) => setCaptureSource(e.target.value as CaptureSource)}
+            >
+              <option value="mic">麦克风</option>
+              <option value="share">共享会议声音</option>
+              <option value="device">输入设备</option>
+            </select>
+          </label>
+          {captureSource === "device" ? (
+            <label>
+              输入设备
+              <select
+                value={deviceId}
+                disabled={running || starting}
+                onChange={(e) => setDeviceId(e.target.value)}
+                onFocus={() => void refreshDevices()}
+              >
+                <option value="">请选择 BlackHole / Loopback</option>
+                {devices.map((item, index) => (
+                  <option key={item.deviceId || index} value={item.deviceId}>
+                    {item.label || `输入设备 ${index + 1}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label>
             源语言
             <select
@@ -186,15 +327,25 @@ export function LiveTranslatePanel({
               ))}
             </select>
           </label>
-          {running ? (
-            <button type="button" className="stop" onClick={() => void halt()}>
-              停止
+          <div className="live-actions">
+            {running ? (
+              <button type="button" className="stop" onClick={() => void halt()}>
+                停止
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="live-start"
+                onClick={() => void onStart()}
+                disabled={!ready || starting || !deviceReady}
+              >
+                {starting ? "正在加载模型…" : captureSource === "mic" ? "开始听写翻译" : "开始听会议"}
+              </button>
+            )}
+            <button type="button" className="ghost" onClick={() => void onPop()}>
+              弹出字幕
             </button>
-          ) : (
-            <button type="button" className="live-start" onClick={() => void onStart()} disabled={!ready || starting}>
-              {starting ? "正在加载模型…" : "开始听写翻译"}
-            </button>
-          )}
+          </div>
           <p className="hint">
             {running ? (busy ? "正在识别并翻译…" : "正在听…") : health?.instruct_loaded ? "翻译模型已加载" : "翻译模型未加载"}
           </p>

@@ -37,6 +37,7 @@ import {
 import { FileField } from "./components/FileField";
 import { TempSlider } from "./components/TempSlider";
 import { TranscribePanel } from "./components/TranscribePanel";
+import { LiveCaptionsPage } from "./components/LiveCaptionsPage";
 import { LiveTranslatePanel } from "./components/LiveTranslatePanel";
 import { AppSidebar, ThemeGlyph, type ThemeName } from "./components/AppSidebar";
 import { AudioRow } from "./components/AudioRow";
@@ -1172,6 +1173,10 @@ export default function App() {
           }`
         : `${health?.model_loaded ? "已加载" : "未加载"}${health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}${health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}`;
 
+  if (route === "captions") {
+    return <LiveCaptionsPage />;
+  }
+
   return (
     <div className={appClass}>
       {drawerOpen ? <button type="button" className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setDrawerOpen(false)} /> : null}
@@ -1201,7 +1206,7 @@ export default function App() {
               {route === "transcribe"
                 ? "语音转文字，结果可填回配音页"
                 : route === "translate"
-                  ? "麦克风听写并译成字幕，不接配音队列"
+                  ? "听麦克风或会议，弹出字幕，不接配音队列"
                   : "音色、文稿、成片并排工作"}
             </span>
           </div>
