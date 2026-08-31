@@ -46,12 +46,20 @@ class JobRunner:
         self._thread.start()
 
     def submit(self, **kwargs) -> Job:
-        job = Job(id=uuid.uuid4().hex[:12], status="queued", **kwargs)
-        with self._cv:
-            self.jobs[job.id] = job
-            self._pending.append(job.id)
-            self._cv.notify()
-        return job
+        from .live import live_session
+
+        with live_session.lock:
+            if live_session.active:
+                raise RuntimeError("实时翻译进行中，请先停止")
+            job = Job(id=uuid.uuid4().hex[:12], status="queued", **kwargs)
+            with self._cv:
+                self.jobs[job.id] = job
+                self._pending.append(job.id)
+                self._cv.notify()
+            return job
+
+    def busy(self) -> bool:
+        return any(item.status in {"queued", "running", "cancelling"} for item in self.jobs.values())
 
     def get(self, job_id: str) -> Job:
         job = self.jobs.get(job_id)

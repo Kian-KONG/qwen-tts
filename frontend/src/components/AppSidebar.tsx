@@ -16,6 +16,21 @@ function IconDub() {
   );
 }
 
+function IconTranslate() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M4 6h9M8.5 6c0 5-2 9-5.5 12M7 10.5h5.5M13.5 13.5h6.2M16.6 13.5l2.6 7M19.7 20.5h-4.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function IconAsr() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -66,6 +81,7 @@ export function ThemeGlyph({ theme }: { theme: ThemeName }) {
 const ITEMS: { id: AppRoute; label: string; icon: typeof IconDub }[] = [
   { id: "dub", label: "配音", icon: IconDub },
   { id: "transcribe", label: "转写", icon: IconAsr },
+  { id: "translate", label: "实时翻译", icon: IconTranslate },
 ];
 
 export function AppSidebar({

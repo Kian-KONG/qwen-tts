@@ -10,7 +10,7 @@ export NPM_CONFIG_REGISTRY ?= https://registry.npmmirror.com
 export HF_ENDPOINT ?= https://hf-mirror.com
 export HF_MIRROR ?= https://hf-mirror.com
 
-.PHONY: help setup download download-design download-custom download-asr start dev tunnel tunnel-named tunnel-setup health
+.PHONY: help setup download download-design download-custom download-asr download-instruct start dev tunnel tunnel-named tunnel-setup health
 
 help:
 	@echo "Apple Silicon / MLX targets:"
@@ -19,6 +19,7 @@ help:
 	@echo "  make download-design Download VoiceDesign bf16 (described voice)"
 	@echo "  make download-custom Download CustomVoice bf16 (preset speakers)"
 	@echo "  make download-asr   Download Qwen3-ASR 1.7B bf16 (speech-to-text)"
+	@echo "  make download-instruct Download Qwen3-1.7B bf16 (live translate)"
 	@echo "  make start         Stop anything on :8000, build frontend, serve"
 	@echo "  make dev           Backend + Vite hot reload"
 	@echo "  make health        GET /health"
@@ -40,6 +41,9 @@ download-custom:
 
 download-asr:
 	./scripts/download_model.sh asr
+
+download-instruct:
+	./scripts/download_model.sh instruct
 
 start:
 	./scripts/start.sh

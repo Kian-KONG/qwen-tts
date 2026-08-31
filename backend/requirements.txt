@@ -7,6 +7,7 @@ soundfile>=0.13.0
 numpy>=1.26.0
 huggingface_hub>=0.26.0
 modelscope>=1.22.0
+mlx-lm>=0.25.0
 pydantic>=2.9.0
 imageio-ffmpeg>=0.5.1
 openpyxl>=3.1.0

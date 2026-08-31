@@ -83,8 +83,10 @@ class TTSEngine:
             return
         from mlx_audio.tts.utils import load_model
         from .asr import asr_engine
+        from .translate import instruct_engine
 
         asr_engine.unload_unlocked()
+        instruct_engine.unload_unlocked()
         self.unload_unlocked()
         if mode == "mixed":
             mode = "preset"

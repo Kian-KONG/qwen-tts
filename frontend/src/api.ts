@@ -96,6 +96,10 @@ export type Health = {
   asr_model_id?: string;
   asr_model_ready?: boolean;
   asr_loaded?: boolean;
+  instruct_model_id?: string;
+  instruct_model_ready?: boolean;
+  instruct_loaded?: boolean;
+  live_translate_active?: boolean;
   current_mode?: "clone" | "design" | "preset" | string;
   default_speaker?: string;
   batch_size: number;
@@ -208,6 +212,45 @@ export async function getTranscribeJob(id: string): Promise<Transcript> {
 
 export async function cancelTranscribeJob(id: string): Promise<Transcript> {
   const res = await request(`/api/transcribe/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  return res.json();
+}
+
+export type LiveTranslateLine = {
+  source_text: string;
+  target_text: string;
+  skipped?: boolean;
+};
+
+export type LiveTranslateSession = {
+  ok: boolean;
+  active: boolean;
+  source_language?: string;
+  target_language?: string;
+  asr_loaded?: boolean;
+  instruct_loaded?: boolean;
+};
+
+export async function startLiveTranslate(
+  sourceLanguage: string,
+  targetLanguage: string,
+): Promise<LiveTranslateSession> {
+  const res = await request("/api/live-translate/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_language: sourceLanguage, target_language: targetLanguage }),
+  });
+  return res.json();
+}
+
+export async function sendLiveTranslateChunk(file: File): Promise<LiveTranslateLine> {
+  const body = new FormData();
+  body.set("audio", file);
+  const res = await request("/api/live-translate/chunk", { method: "POST", body });
+  return res.json();
+}
+
+export async function stopLiveTranslate(): Promise<LiveTranslateSession> {
+  const res = await request("/api/live-translate/stop", { method: "POST" });
   return res.json();
 }
 

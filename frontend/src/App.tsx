@@ -37,6 +37,7 @@ import {
 import { FileField } from "./components/FileField";
 import { TempSlider } from "./components/TempSlider";
 import { TranscribePanel } from "./components/TranscribePanel";
+import { LiveTranslatePanel } from "./components/LiveTranslatePanel";
 import { AppSidebar, ThemeGlyph, type ThemeName } from "./components/AppSidebar";
 import { AudioRow } from "./components/AudioRow";
 import { ClipList } from "./components/ClipList";
@@ -1149,13 +1150,15 @@ export default function App() {
   const modelName =
     route === "transcribe"
       ? health?.asr_model_id?.split("/").pop() || "Qwen3-ASR"
-      : (
-          health?.current_mode === "design"
-            ? health?.design_model_id
-            : health?.current_mode === "preset"
-              ? health?.custom_model_id
-              : health?.model_id
-        )?.split("/").pop() || "等待模型";
+      : route === "translate"
+        ? health?.instruct_model_id?.split("/").pop() || "Qwen3-1.7B"
+        : (
+            health?.current_mode === "design"
+              ? health?.design_model_id
+              : health?.current_mode === "preset"
+                ? health?.custom_model_id
+                : health?.model_id
+          )?.split("/").pop() || "等待模型";
   const modelDetail =
     route === "transcribe"
       ? health?.asr_loaded
@@ -1163,7 +1166,11 @@ export default function App() {
         : health?.asr_model_ready
           ? "转写就绪"
           : "转写未下载"
-      : `${health?.model_loaded ? "已加载" : "未加载"}${health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}${health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}`;
+      : route === "translate"
+        ? `${health?.asr_model_ready ? "转写就绪" : "转写未下载"} · ${
+            health?.instruct_loaded ? "翻译已加载" : health?.instruct_model_ready ? "翻译就绪" : "翻译未下载"
+          }`
+        : `${health?.model_loaded ? "已加载" : "未加载"}${health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}${health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}`;
 
   return (
     <div className={appClass}>
@@ -1189,8 +1196,14 @@ export default function App() {
             <span />
           </button>
           <div className="app-bar-title">
-            <strong>{route === "transcribe" ? "转写" : "配音"}</strong>
-            <span>{route === "transcribe" ? "语音转文字，结果可填回配音页" : "音色、文稿、成片并排工作"}</span>
+            <strong>{route === "transcribe" ? "转写" : route === "translate" ? "实时翻译" : "配音"}</strong>
+            <span>
+              {route === "transcribe"
+                ? "语音转文字，结果可填回配音页"
+                : route === "translate"
+                  ? "麦克风听写并译成字幕，不接配音队列"
+                  : "音色、文稿、成片并排工作"}
+            </span>
           </div>
           <button
             type="button"
@@ -1229,6 +1242,8 @@ export default function App() {
         onApplyToScript={applyAsrToScript}
         onApplyToClone={applyAsrToClone}
       />
+      ) : route === "translate" ? (
+      <LiveTranslatePanel health={health} languages={languages} />
       ) : (
       <div className={`studio${voicesCollapsed ? " voices-collapsed" : ""}`}>
       <section className="panel studio-voices">

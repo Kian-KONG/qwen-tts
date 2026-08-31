@@ -30,6 +30,13 @@ ASR_MODEL_ID = os.getenv(
     "mlx-community/Qwen3-ASR-1.7B-bf16",
 )
 ASR_MODEL_DIR = Path(os.getenv("QWEN_ASR_MODEL", ROOT / "models" / "qwen3-asr")).resolve()
+INSTRUCT_MODEL_ID = os.getenv(
+    "QWEN_INSTRUCT_MODEL_ID",
+    "mlx-community/Qwen3-1.7B-bf16",
+)
+INSTRUCT_MODEL_DIR = Path(
+    os.getenv("QWEN_INSTRUCT_MODEL", ROOT / "models" / "qwen3-instruct")
+).resolve()
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
 SCRIPTS_DIR = Path(os.getenv("QWEN_TTS_SCRIPTS", ROOT / "data" / "scripts")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
@@ -103,5 +110,6 @@ for path in (
     DESIGN_MODEL_DIR.parent,
     CUSTOM_MODEL_DIR.parent,
     ASR_MODEL_DIR.parent,
+    INSTRUCT_MODEL_DIR.parent,
 ):
     path.mkdir(parents=True, exist_ok=True)

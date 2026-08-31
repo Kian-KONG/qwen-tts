@@ -28,6 +28,8 @@ from .config import (
     LANGUAGE_BY_ID,
     MODEL_DIR,
     MODEL_ID,
+    INSTRUCT_MODEL_DIR,
+    INSTRUCT_MODEL_ID,
     SPEAKER_BY_ID,
     SPEAKERS,
     TTS_TEMPERATURE,
@@ -38,9 +40,11 @@ from .engine import engine
 from .job_assets import full_wav, segment_wav, track_wav, zip_bytes
 from .job_repo import JobBusy, delete_job, get_public, item_list, list_public
 from .jobs import public_job, runner
+from .live import live_session, save_upload
 from .modes import parse_mode
 from .paths import is_local_model_dir
 from .script_import import import_spreadsheet
+from .translate import instruct_engine
 from .voice_assembly import assemble_job_voices
 
 
@@ -123,6 +127,11 @@ class ScriptUpdateRequest(BaseModel):
     name: Optional[str] = None
     markdown: Optional[str] = None
     language: Optional[str] = None
+
+
+class LiveStartRequest(BaseModel):
+    source_language: str = "Auto"
+    target_language: str = "English"
 
 
 def _normalize_mode(mode: str | None) -> str:
@@ -253,6 +262,10 @@ def health():
         "asr_model_path": asr_engine.model_path,
         "asr_model_ready": is_local_model_dir(ASR_MODEL_DIR),
         "asr_loaded": asr_engine.loaded,
+        "instruct_model_id": INSTRUCT_MODEL_ID,
+        "instruct_model_ready": is_local_model_dir(INSTRUCT_MODEL_DIR),
+        "instruct_loaded": instruct_engine.loaded,
+        "live_translate_active": live_session.active,
         "current_mode": engine.mode,
         "default_speaker": DEFAULT_SPEAKER,
         "batch_size": BATCH_SIZE,
@@ -294,6 +307,8 @@ def api_speakers():
 
 @app.get("/api/speakers/{speaker_id}/preview")
 def api_speaker_preview(speaker_id: str):
+    if live_session.active:
+        raise HTTPException(status_code=409, detail="实时翻译进行中，请先停止")
     try:
         path = engine.preview_speaker(speaker_id)
     except KeyError:
@@ -397,11 +412,15 @@ async def api_transcribe(
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(await audio.read())
         tmp_path = Path(tmp.name)
-    job = asr_runner.submit(
-        audio_path=str(tmp_path),
-        language=_normalize_language(language),
-        context=context or "",
-    )
+    try:
+        job = asr_runner.submit(
+            audio_path=str(tmp_path),
+            language=_normalize_language(language),
+            context=context or "",
+        )
+    except RuntimeError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return public_asr_job(job)
 
 
@@ -423,6 +442,37 @@ def api_cancel_transcribe(job_id: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/api/live-translate/start")
+def api_live_start(payload: LiveStartRequest):
+    try:
+        source = _normalize_language(payload.source_language)
+        target = _normalize_language(payload.target_language)
+        return live_session.start(source, target)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/live-translate/chunk")
+async def api_live_chunk(audio: UploadFile = File(...)):
+    suffix = Path(audio.filename or "chunk.webm").suffix or ".webm"
+    path = save_upload(await audio.read(), suffix)
+    try:
+        return live_session.process_chunk(path)
+    except FileNotFoundError as exc:
+        Path(path).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        Path(path).unlink(missing_ok=True)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/live-translate/stop")
+def api_live_stop():
+    return live_session.stop()
+
+
 @app.post("/v1/audio/transcriptions")
 async def openai_transcriptions(
     file: UploadFile = File(...),
@@ -431,6 +481,8 @@ async def openai_transcriptions(
     authorization: Optional[str] = Header(None),
 ):
     _check_key(authorization)
+    if live_session.active:
+        raise HTTPException(status_code=409, detail="实时翻译进行中，请先停止")
     lang = language if language in LANGUAGE_BY_ID else LANGUAGE
     suffix = Path(file.filename or "audio.wav").suffix or ".wav"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -576,6 +628,10 @@ async def api_create_job(
         if temp_ref:
             temp_ref.unlink(missing_ok=True)
         raise
+    except RuntimeError as exc:
+        if temp_ref:
+            temp_ref.unlink(missing_ok=True)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception:
         if temp_ref:
             temp_ref.unlink(missing_ok=True)
@@ -599,21 +655,24 @@ def api_create_job_json(payload: JobRequest):
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Voice not found")
-    job = runner.submit(
-        text=payload.text.strip(),
-        ref_audio=audio_path,
-        ref_text=transcript,
-        batch_size=payload.batch_size,
-        language=_normalize_language(payload.language),
-        mode=job_mode,
-        instruct=description,
-        speaker=speaker_id,
-        voices=job_voices,
-        stable=payload.stable,
-        temperature=payload.temperature,
-        script_name=(payload.script_name or "").strip() or "文稿",
-        verify_asr=payload.verify_asr,
-    )
+    try:
+        job = runner.submit(
+            text=payload.text.strip(),
+            ref_audio=audio_path,
+            ref_text=transcript,
+            batch_size=payload.batch_size,
+            language=_normalize_language(payload.language),
+            mode=job_mode,
+            instruct=description,
+            speaker=speaker_id,
+            voices=job_voices,
+            stable=payload.stable,
+            temperature=payload.temperature,
+            script_name=(payload.script_name or "").strip() or "文稿",
+            verify_asr=payload.verify_asr,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return public_job(job)
 
 

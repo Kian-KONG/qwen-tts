@@ -6,10 +6,11 @@
 - **描述音色**（VoiceDesign）：写一段声音描述造音色
 - **声音克隆**（Base）：3–10 秒参考音频 + 逐字稿，保存在本机 `data/voices/` 可反复选用
 - **语音转文字**（Qwen3-ASR 1.7B）：上传音频生成文稿或克隆逐字稿
+- **实时翻译字幕**：麦克风短窗听写后用 Qwen3-1.7B 译成目标语，和配音队列分开
 - **Excel 导入**：每个非空单元格一段语音，按编号配音
 - **配音列表**：给编号文稿起名存在本机，下次直接载入
 
-React 前端 + Python 后端，推理走 MLX。16GB 机器同一时间只加载一个大模型：配音和转写会互相卸掉对方，避免两个 1.7B 同时占满内存。
+React 前端 + Python 后端，推理走 MLX。16GB 机器上配音和转写会互相卸掉对方。实时翻译页会卸掉 TTS，尽量同时留下 ASR 和 Instruct。
 
 不要用 4bit：输出会乱码。bf16 峰值大约 6GB。
 
@@ -23,6 +24,7 @@ make download
 make download-design
 make download-custom
 make download-asr
+make download-instruct
 make start
 ```
 
@@ -39,6 +41,7 @@ make start
 | `make download-design` | 拉 VoiceDesign bf16（描述音色） |
 | `make download-custom` | 拉 CustomVoice bf16（预设说话人） |
 | `make download-asr` | 拉 Qwen3-ASR 1.7B bf16（语音转文字） |
+| `make download-instruct` | 拉 Qwen3-1.7B bf16（实时翻译字幕） |
 | `make start` | 打包前端并由 FastAPI 提供 |
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |

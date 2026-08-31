@@ -25,8 +25,12 @@ case "$KIND" in
     DEST="$ROOT/models/qwen3-asr"
     MODEL_ID="mlx-community/Qwen3-ASR-0.6B-bf16"
     ;;
+  instruct)
+    DEST="$ROOT/models/qwen3-instruct"
+    MODEL_ID="mlx-community/Qwen3-1.7B-bf16"
+    ;;
   *)
-    echo "Usage: $0 [base|design|custom|asr|asr-0.6b]"
+    echo "Usage: $0 [base|design|custom|asr|asr-0.6b|instruct]"
     exit 1
     ;;
 esac

@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 
-export type AppRoute = "dub" | "transcribe";
+export type AppRoute = "dub" | "transcribe" | "translate";
 
 export function hashToRoute(hash: string): AppRoute {
   const value = hash.replace(/^#/, "").replace(/^\/+/, "").split("?")[0];
   if (value === "transcribe" || value === "asr") return "transcribe";
+  if (value === "translate" || value === "live") return "translate";
   return "dub";
 }
 
 export function routeToHash(route: AppRoute): string {
-  return route === "transcribe" ? "#/transcribe" : "#/";
+  if (route === "transcribe") return "#/transcribe";
+  if (route === "translate") return "#/translate";
+  return "#/";
 }
 
 export function useHashRoute(): [AppRoute, (route: AppRoute) => void] {
