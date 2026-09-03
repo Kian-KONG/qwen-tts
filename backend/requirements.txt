@@ -1,5 +1,9 @@
 mlx-audio>=0.5.0
 misaki
+num2words
+phonemizer-fork
+espeakng-loader
+spacy
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.18

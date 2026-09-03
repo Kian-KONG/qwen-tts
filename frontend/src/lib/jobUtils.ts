@@ -1,4 +1,4 @@
-import { apiUrl, withDownload, type Job, type JobSegment } from "../api";
+import { apiUrl, type Job, type JobSegment, type JobTrack } from "../api";
 
 export function clipLabel(segment: { text?: string | null; voice?: string | null; filename?: string | null }): string {
   const text = (segment.text || "").trim();
@@ -38,6 +38,28 @@ export function jobClipCount(job: Job): number {
   return Math.max(job.segments?.length || 0, job.chunks || 0);
 }
 
+export function jobVoiceTracks(job: Job): JobTrack[] {
+  if (job.tracks?.length) return job.tracks;
+  if (job.status === "done" && job.download_url) {
+    return [
+      {
+        index: 1,
+        voice: job.speakers?.[0] || job.speaker || null,
+        filename: job.download_name || null,
+        duration_sec: job.audio_sec,
+        url: job.download_url,
+      },
+    ];
+  }
+  return [];
+}
+
+export function jobTrackName(job: Job, track: JobTrack): string {
+  if (track.filename) return wavName(track.filename);
+  const voice = (track.voice || "").trim() || `音色${track.index}`;
+  return wavName(`${job.script_name || job.title || job.id} - ${voice}`);
+}
+
 export function jobNeedsZip(job: Job): boolean {
   return jobClipCount(job) > 1 || jobVoiceCount(job) > 1;
 }
@@ -48,14 +70,4 @@ export function jobZipUrl(job: Job): string {
 
 export function jobZipName(job: Job): string {
   return job.zip_name || `${job.title || job.id}.zip`;
-}
-
-export function jobFullTrackName(job: Job): string {
-  const track = job.tracks?.[0]?.filename;
-  if (track) return wavName(track);
-  return wavName(job.download_name || job.title || job.id);
-}
-
-export function jobFullTrackUrl(job: Job): string {
-  return withDownload(job.download_url || apiUrl(`/api/jobs/${job.id}/audio`));
 }

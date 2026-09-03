@@ -129,12 +129,16 @@ def to_float32(audio) -> np.ndarray:
     peak = float(np.max(np.abs(array))) if array.size else 0.0
     if peak > 1.2:
         array = array / 32768.0
-    return np.clip(array, -1.0, 1.0)
+        peak = float(np.max(np.abs(array))) if array.size else 0.0
+    if peak > 1.0:
+        array = array / peak
+    return array
 
 
 _PUNCT = re.compile(r"[。！？.!?…，,、；;：:\s\"'「」『』（）()\[\]【】]+")
 _SHORT_END = re.compile(r"[？！!?]$")
 _CJK = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+_MISAKI_LINK = re.compile(r"\[([^\]]+)\]\(/[^)]*/\)")
 _PAIR_TAILS = (
     (re.compile(r"(成功|失败)$"), "结果"),
     (re.compile(r"(太远|太近)$"), "太距"),
@@ -173,19 +177,92 @@ def atempo_range(texts: list[str]) -> tuple[float, float]:
     return ATEMPO_MIN, ATEMPO_MAX
 
 
+def spoken_script_text(text: str) -> str:
+    return _MISAKI_LINK.sub(r"\1", text or "")
+
+
 def normalize_tts_text(text: str) -> str:
-    value = re.sub(r"\s+", " ", (text or "").strip())
+    holds: list[str] = []
+
+    def stash(match: re.Match[str]) -> str:
+        holds.append(match.group(0))
+        return f"⟦M{len(holds) - 1}⟧"
+
+    value = _MISAKI_LINK.sub(stash, text or "")
+    value = re.sub(r"\s+", " ", value.strip())
     if not value:
         return value
     value = re.sub(r"[。.]{2,}", "。", value)
     value = re.sub(r"…+", "。", value)
     cjk = len(_CJK.findall(value))
     count = spoken_len(value)
-    if cjk and count <= 8 and cjk >= max(1, count // 2) and not _SHORT_END.search(value):
+    cjk_short = bool(cjk) and count <= 8 and cjk >= max(1, count // 2)
+    latin_short = count <= 24 and cjk < max(1, count // 2)
+    if (cjk_short or latin_short) and not _SHORT_END.search(value):
         value = re.sub(r"[。.!?！？\s]+$", "", value)
         if value:
-            value = f"{value}。"
+            value = f"{value}。" if cjk_short else f"{value}."
+    for index, held in enumerate(holds):
+        value = value.replace(f"⟦M{index}⟧", held)
     return value
+
+
+def peak_normalize(audio: np.ndarray, ceiling: float = 0.95) -> np.ndarray:
+    array = to_float32(audio)
+    peak = float(np.max(np.abs(array))) if array.size else 0.0
+    if peak > ceiling > 0:
+        array = array * (ceiling / peak)
+    return array
+
+
+def fade_edges(audio: np.ndarray, sample_rate: int, fade_ms: float = 12.0) -> np.ndarray:
+    array = to_float32(audio)
+    n = int(sample_rate * max(0.0, fade_ms) / 1000.0)
+    n = min(n, max(0, array.size // 2))
+    if array.size == 0 or n <= 0:
+        return array
+    ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)
+    out = array.copy()
+    out[:n] *= ramp
+    out[-n:] *= ramp[::-1]
+    return out
+
+
+def pad_silence(audio: np.ndarray, sample_rate: int, pad_ms: int = SILENCE_PAD_MS) -> np.ndarray:
+    array = to_float32(audio)
+    n = int(sample_rate * max(0, pad_ms) / 1000.0)
+    if array.size == 0 or n <= 0:
+        return array
+    z = np.zeros(n, dtype=np.float32)
+    return np.concatenate([z, array, z])
+
+
+def polish_clip(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    short: bool = False,
+    pad_ms: int | None = None,
+) -> np.ndarray:
+    """Cut vocoder edge buzz, then pad so 24k→44.1k resample has room."""
+    array = peak_normalize(audio, 0.95)
+    if sample_rate <= 0 or array.size == 0:
+        return array
+    if short:
+        array = trim_silence(array, sample_rate, pad_ms=50, thresh=0.012)
+    array = fade_edges(array, sample_rate, 16.0 if short else 8.0)
+    silence = 120 if short else SILENCE_PAD_MS
+    if pad_ms is not None:
+        silence = pad_ms
+    return pad_silence(array, sample_rate, silence)
+
+
+def is_short_clip(text: str, audio: np.ndarray | None = None, sample_rate: int = 0) -> bool:
+    if spoken_len(spoken_script_text(text)) <= 24:
+        return True
+    if audio is not None and sample_rate > 0 and audio.size / float(sample_rate) < 0.85:
+        return True
+    return False
 
 
 def trim_silence(
@@ -361,9 +438,9 @@ def concat_wav_files(paths: list[Path], dest: Path, gap_ms: int = 400) -> Path:
     return write_master_wav(dest, audio, sample_rate)
 
 
-def write_wav(path: Path, audio: np.ndarray, sample_rate: int) -> Path:
+def write_wav(path: Path, audio: np.ndarray, sample_rate: int, subtype: str = "PCM_16") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(path, to_float32(audio), sample_rate, subtype="PCM_16")
+    sf.write(path, to_float32(audio), sample_rate, subtype=subtype)
     return path
 
 
@@ -380,23 +457,37 @@ def resample_for_video(src: Path, dst: Path, sample_rate: int = OUTPUT_SAMPLE_RA
         shutil.copy2(src, dst)
         return dst
     dst.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            ffmpeg,
-            "-y",
-            "-i",
-            str(src),
-            "-ar",
-            str(sample_rate),
-            "-ac",
-            "1",
-            "-c:a",
-            "pcm_s24le",
-            str(dst),
-        ],
-        check=True,
-        capture_output=True,
-    )
+    rate = int(sample_rate)
+    soxr = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(src),
+        "-af",
+        f"aresample={rate}:resampler=soxr:precision=28",
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s24le",
+        str(dst),
+    ]
+    fallback = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(src),
+        "-ar",
+        str(rate),
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s24le",
+        str(dst),
+    ]
+    try:
+        subprocess.run(soxr, check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        subprocess.run(fallback, check=True, capture_output=True)
     return dst
 
 

@@ -100,11 +100,17 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 
 `make download-kokoro` 后，配音页切到 **Kokoro**。固定英文音色（Heart / Bella / Adam 等），适合批量旁白，Apache 2.0 可商用。不能克隆或描述音色。生成时会卸掉 Qwen TTS。
 
+读音用 Misaki。文稿里可写 `[Kokoro](/kˈOkəɹO/)` 指定某个词的音标；点 **看读音** 会转出整段音标，**写入标注** 会把文稿改成这种格式。
+
+多选默认仍是每个音色各出一轨。勾选 **融合已选音色** 后，只支持同性音色（女声+女声或男声+男声），每个音色有独立滑条。向量会先按最后一维 L2 归一化，再按滑条比例加性混合，最后把幅度拉回加权均值，只出一轨。
+
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/jobs \
   -F "text=1. Hello from Kokoro." \
   -F "mode=kokoro" \
-  -F "speakers=af_heart,am_adam" \
+  -F "speakers=af_heart,af_bella" \
+  -F "blend=true" \
+  -F "blend_weights=70,30" \
   -F "language=English"
 ```
 

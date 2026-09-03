@@ -915,6 +915,47 @@ label {
   border: 1px solid var(--line);
 }
 
+.blend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+.blend-sliders {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.blend-slider {
+  display: grid;
+  gap: 4px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.blend-slider span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.blend-slider small {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+.blend-slider input[type="range"] {
+  width: 100%;
+  min-height: 0;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
 .speaker-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1460,6 +1501,68 @@ button .spin,
   margin: 0;
 }
 
+.phoneme-box {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+}
+
+.phoneme-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.phoneme-list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  list-style: none;
+}
+
+.phoneme-hint {
+  margin: 0;
+}
+
+.phoneme-list li {
+  display: grid;
+  grid-template-columns: 2em 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.phoneme-list span {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.phoneme-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phoneme-word {
+  display: grid;
+  gap: 4px;
+  min-width: 7.5rem;
+}
+
+.phoneme-word span {
+  font-size: 12px;
+}
+
+.phoneme-word input {
+  min-height: 34px;
+  padding: 6px 8px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
 .clips {
   list-style: none;
   margin: 10px 0 0;
@@ -1538,6 +1641,12 @@ button .spin,
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 8px;
+}
+
+.track-list {
+  display: grid;
+  gap: 4px;
   margin-top: 8px;
 }
 

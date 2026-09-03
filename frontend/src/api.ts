@@ -306,10 +306,42 @@ export async function listKokoroVoices(): Promise<{ data: Speaker[]; default: st
   return { data: data.data ?? [], default: data.default ?? "af_heart", ready: data.ready };
 }
 
-export async function fetchKokoroPreview(id: string): Promise<string> {
-  const res = await request(`/api/kokoro/voices/${encodeURIComponent(id)}/preview`);
+export async function fetchKokoroPreview(ids: string | string[], weights?: number[]): Promise<string> {
+  const voices = Array.isArray(ids) ? ids.join(",") : ids;
+  const query = new URLSearchParams({ voices });
+  if (weights?.length) query.set("weights", weights.join(","));
+  const res = await request(`/api/kokoro/preview?${query.toString()}`);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
+}
+
+export type KokoroPhonemeToken = {
+  text: string;
+  phonemes: string;
+  whitespace?: string;
+};
+
+export type KokoroPhonemeSegment = {
+  text: string;
+  phonemes: string;
+  annotated: string;
+  tokens?: KokoroPhonemeToken[];
+};
+
+export type KokoroPhonemes = {
+  british: boolean;
+  phonemes: string;
+  annotated: string;
+  segments: KokoroPhonemeSegment[];
+};
+
+export async function previewKokoroPhonemes(text: string, british = false): Promise<KokoroPhonemes> {
+  const res = await request("/api/kokoro/phonemes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, british }),
+  });
+  return res.json();
 }
 
 export async function listVoices(): Promise<Voice[]> {
@@ -431,6 +463,8 @@ export async function createJob(opts: {
   temperature?: number;
   scriptName?: string;
   verifyAsr?: boolean;
+  blend?: boolean;
+  blendWeights?: number[];
 }): Promise<Job> {
   const body = new FormData();
   body.set("text", opts.text);
@@ -451,6 +485,8 @@ export async function createJob(opts: {
   if (opts.refText) body.set("ref_text", opts.refText);
   if (opts.scriptName) body.set("script_name", opts.scriptName);
   body.set("verify_asr", opts.verifyAsr ? "true" : "false");
+  body.set("blend", opts.blend ? "true" : "false");
+  if (opts.blend && opts.blendWeights?.length) body.set("blend_weights", opts.blendWeights.join(","));
   const res = await request("/api/jobs", { method: "POST", body });
   return withJobUrls(await res.json());
 }

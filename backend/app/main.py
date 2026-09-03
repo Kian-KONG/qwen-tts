@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -38,12 +38,12 @@ from .config import (
     TTS_TEMPERATURE,
 )
 from .asr import asr_engine, asr_runner, public_asr_job
-from .chunking import preview_segments
+from .chunking import preview_segments, split_script
 from .engine import engine
 from .job_assets import full_wav, segment_wav, track_wav, zip_bytes
 from .job_repo import JobBusy, delete_job, get_public, item_list, list_public
 from .jobs import public_job, runner
-from .kokoro import is_kokoro_ready, kokoro_engine
+from .kokoro import is_kokoro_ready, kokoro_engine, parse_kokoro_voice_ids, phonemize_text
 from .live import live_session, save_upload
 from .modes import parse_mode
 from .paths import is_local_model_dir
@@ -164,6 +164,8 @@ def _assemble_job_voices(
     style_instruct: Optional[str] = None,
     ref_audio: str = "",
     ref_text: str = "",
+    blend: bool = False,
+    blend_weights=None,
 ) -> tuple[str, list[dict], str, str, str, str]:
     try:
         return assemble_job_voices(
@@ -177,6 +179,8 @@ def _assemble_job_voices(
             style_instruct=style_instruct,
             ref_audio=ref_audio,
             ref_text=ref_text,
+            blend=blend,
+            blend_weights=blend_weights,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -238,6 +242,8 @@ class JobRequest(BaseModel):
     temperature: float = Field(default=TTS_TEMPERATURE, ge=0.05, le=1.5)
     script_name: Optional[str] = None
     verify_asr: bool = False
+    blend: bool = False
+    blend_weights: Optional[str] = None
 
 
 def _resolve_clone(voice: Optional[str], ref_audio: Optional[str], ref_text: Optional[str]) -> tuple[str, str]:
@@ -325,22 +331,60 @@ def api_kokoro_voices():
     return {"data": KOKORO_VOICES, "default": DEFAULT_KOKORO_VOICE, "ready": is_kokoro_ready()}
 
 
+class PhonemeRequest(BaseModel):
+    text: str
+    british: bool = False
+
+
+@app.post("/api/kokoro/phonemes")
+def api_kokoro_phonemes(payload: PhonemeRequest):
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    try:
+        chunks = split_script(text, "English") or [text]
+        segments = [phonemize_text(chunk, british=payload.british) for chunk in chunks]
+    except ImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    numbered = "\n".join(f"{index}. {item['annotated']}" for index, item in enumerate(segments, 1))
+    return {
+        "british": payload.british,
+        "phonemes": "\n".join(item["phonemes"] for item in segments),
+        "annotated": numbered,
+        "segments": segments,
+    }
+
+
+@app.get("/api/kokoro/preview")
+def api_kokoro_preview_query(voices: str = Query(..., min_length=1), weights: Optional[str] = Query(None)):
+    return _kokoro_preview_file(voices, weights)
+
+
 @app.get("/api/kokoro/voices/{voice_id}/preview")
 def api_kokoro_preview(voice_id: str):
+    return _kokoro_preview_file(voice_id)
+
+
+def _kokoro_preview_file(voice_id: str, weights: Optional[str] = None):
     if live_session.active:
         raise HTTPException(status_code=409, detail="实时翻译进行中，请先停止")
     try:
-        path = kokoro_engine.preview_voice(voice_id)
+        ids = parse_kokoro_voice_ids(voice_id)
+        path = kokoro_engine.preview_voice(",".join(ids), weights)
     except KeyError:
         raise HTTPException(status_code=404, detail="Kokoro voice not found")
     except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return FileResponse(
         audio_util.browser_wav(path),
         media_type="audio/wav",
-        filename=f"{voice_id}.wav",
+        filename=f"{'-'.join(ids)}.wav",
         content_disposition_type="inline",
     )
 
@@ -613,6 +657,8 @@ async def api_create_job(
     script_name: Optional[str] = Form(None),
     title: Optional[str] = Form(None),
     verify_asr: Optional[str] = Form("false"),
+    blend: Optional[str] = Form("false"),
+    blend_weights: Optional[str] = Form(None),
     ref_audio: Optional[UploadFile] = File(None),
 ):
     if not (text or "").strip():
@@ -645,6 +691,8 @@ async def api_create_job(
             style_instruct=style_instruct,
             ref_audio=upload_path,
             ref_text=upload_text,
+            blend=_form_flag(blend, False),
+            blend_weights=blend_weights,
         )
         job = runner.submit(
             text=text.strip(),
@@ -692,6 +740,8 @@ def api_create_job_json(payload: JobRequest):
             style_instruct=payload.style_instruct,
             ref_audio=payload.ref_audio or "",
             ref_text=payload.ref_text or "",
+            blend=payload.blend,
+            blend_weights=payload.blend_weights,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Voice not found")

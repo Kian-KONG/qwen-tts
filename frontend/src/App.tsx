@@ -12,6 +12,7 @@ import {
   deleteVoice,
   downloadFile,
   fetchKokoroPreview,
+  previewKokoroPhonemes,
   fetchSpeakerPreview,
   getHealth,
   getJob,
@@ -30,6 +31,7 @@ import {
   withDownload,
   type Health,
   type Job,
+  type KokoroPhonemes,
   type Language,
   type ScriptList,
   type Speaker,
@@ -37,6 +39,7 @@ import {
   type Voice,
 } from "./api";
 import { FileField } from "./components/FileField";
+import { BlendSliders } from "./components/BlendSliders";
 import { TempSlider } from "./components/TempSlider";
 import { TranscribePanel } from "./components/TranscribePanel";
 import { LiveCaptionsPage } from "./components/LiveCaptionsPage";
@@ -44,9 +47,12 @@ import { LiveTranslatePanel } from "./components/LiveTranslatePanel";
 import { AppSidebar, ThemeGlyph, type ThemeName } from "./components/AppSidebar";
 import { AudioRow } from "./components/AudioRow";
 import { ClipList } from "./components/ClipList";
+import { TrackList } from "./components/TrackList";
+import { PhonemeEditor } from "./components/PhonemeEditor";
 import { ScriptLists, type ScriptPending } from "./components/ScriptLists";
 import { FoldSection } from "./components/FoldSection";
-import { jobFullTrackName, jobFullTrackUrl, jobNeedsZip, jobZipName, jobZipUrl, wavName } from "./lib/jobUtils";
+import { blendWeightsQuery, kokoroWeight, normalizedBlendPercents, pruneKokoroWeights, sameKokoroGender } from "./lib/kokoroBlend";
+import { jobNeedsZip, jobVoiceTracks, jobZipName, jobZipUrl, wavName } from "./lib/jobUtils";
 import { useHashRoute } from "./route";
 
 const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
@@ -144,6 +150,8 @@ const PREVIEW_FOLD_KEY = "qwen-tts-preview-fold";
 const VOICES_COLLAPSE_KEY = "qwen-tts-voices-collapsed";
 const ENGINE_KEY = "qwen-tts-engine";
 const KOKORO_VOICES_KEY = "qwen-tts-kokoro-voices";
+const KOKORO_BLEND_KEY = "qwen-tts-kokoro-blend";
+const KOKORO_BLEND_WEIGHTS_KEY = "qwen-tts-kokoro-blend-weights";
 
 const MODE_LABEL: Record<string, string> = {
   preset: "预设",
@@ -261,7 +269,9 @@ export default function App() {
   const [voicesCollapsed, setVoicesCollapsed] = useState(() => stored(VOICES_COLLAPSE_KEY, "0") === "1");
   const [health, setHealth] = useState<Health | null>(null);
   const [languages, setLanguages] = useState<Language[]>([]);
-  const [language, setLanguage] = useState("Auto");
+  const [language, setLanguage] = useState(() =>
+    stored(ENGINE_KEY, "qwen") === "kokoro" ? "English" : "Auto",
+  );
   const [voices, setVoices] = useState<Voice[]>([]);
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [dubEngine, setDubEngine] = useState<"qwen" | "kokoro">(() =>
@@ -269,6 +279,13 @@ export default function App() {
   );
   const [kokoroVoices, setKokoroVoices] = useState<Speaker[]>([]);
   const [selectedKokoro, setSelectedKokoro] = useState<string[]>(() => storedList(KOKORO_VOICES_KEY, ["af_heart"]));
+  const [kokoroBlend, setKokoroBlend] = useState(() => stored(KOKORO_BLEND_KEY, "0") === "1");
+  const [kokoroWeights, setKokoroWeights] = useState<Record<string, number>>(() => {
+    const raw = storedJson<Record<string, number>>(KOKORO_BLEND_WEIGHTS_KEY, {});
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  });
+  const [phonemePreview, setPhonemePreview] = useState<KokoroPhonemes | null>(null);
+  const [phonemeBusy, setPhonemeBusy] = useState(false);
   const [selectedSpeakers, setSelectedSpeakers] = useState<string[]>(() => storedList(SPEAKERS_KEY, ["Ryan"]));
   const [voiceId, setVoiceId] = useState(() => stored(VOICE_ID_KEY, "") || storedList(VOICE_IDS_KEY, [])[0] || "");
   const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>(() => {
@@ -341,8 +358,25 @@ export default function App() {
 
   const filledSegments = useMemo(() => parseMarkdownList(markdown), [markdown]);
   const pendingClone = Boolean(!selectedVoiceIds.length && refFile && refText.trim());
+  const canBlendKokoro = sameKokoroGender(selectedKokoro);
+  const blendingKokoro = dubEngine === "kokoro" && kokoroBlend && canBlendKokoro;
   const roster = useMemo(() => {
     if (dubEngine === "kokoro") {
+      if (blendingKokoro) {
+        const percents = normalizedBlendPercents(selectedKokoro, kokoroWeights);
+        const labels = selectedKokoro.map((id) => kokoroVoices.find((item) => item.id === id)?.label || id);
+        return [
+          {
+            key: "kokoro-blend",
+            kind: "kokoro" as const,
+            name: labels.join(" + "),
+            detail: selectedKokoro
+              .map((id, index) => `${labels[index]} ${Math.round(percents[id] || 0)}%`)
+              .join(" · "),
+            remove: () => setKokoroBlend(false),
+          },
+        ];
+      }
       return selectedKokoro.map((id) => {
         const voice = kokoroVoices.find((item) => item.id === id);
         return {
@@ -384,7 +418,7 @@ export default function App() {
       });
     }
     return items;
-  }, [dubEngine, selectedKokoro, kokoroVoices, selectedSpeakers, speakers, designs, selectedVoiceIds, voices]);
+  }, [blendingKokoro, dubEngine, selectedKokoro, kokoroVoices, kokoroWeights, selectedSpeakers, speakers, designs, selectedVoiceIds, voices]);
   const voiceCount = roster.length + (dubEngine === "kokoro" ? 0 : pendingClone ? 1 : 0);
 
   async function refresh() {
@@ -458,6 +492,8 @@ export default function App() {
       window.localStorage.setItem(THEME_KEY, theme);
       window.localStorage.setItem(ENGINE_KEY, dubEngine);
       window.localStorage.setItem(KOKORO_VOICES_KEY, selectedKokoro.join(","));
+      window.localStorage.setItem(KOKORO_BLEND_KEY, kokoroBlend ? "1" : "0");
+      window.localStorage.setItem(KOKORO_BLEND_WEIGHTS_KEY, JSON.stringify(kokoroWeights));
       window.localStorage.setItem(VOICE_FOLD_KEY, voiceFold);
       window.localStorage.setItem(HISTORY_FOLD_KEY, historyOpen ? "1" : "0");
       window.localStorage.setItem(PREVIEW_FOLD_KEY, previewOpen ? "1" : "0");
@@ -465,7 +501,21 @@ export default function App() {
     } catch {
       /* ignore quota / private mode */
     }
-  }, [voiceId, selectedSpeakers, selectedKokoro, selectedVoiceIds, designs, railCollapsed, theme, voiceFold, historyOpen, previewOpen, voicesCollapsed, dubEngine]);
+  }, [voiceId, selectedSpeakers, selectedKokoro, selectedVoiceIds, designs, railCollapsed, theme, voiceFold, historyOpen, previewOpen, voicesCollapsed, dubEngine, kokoroBlend, kokoroWeights]);
+
+  useEffect(() => {
+    setKokoroWeights((current) => {
+      const next = pruneKokoroWeights(selectedKokoro, current);
+      const keys = Object.keys(next);
+      if (keys.length === Object.keys(current).length && keys.every((id) => current[id] === next[id])) {
+        return current;
+      }
+      return next;
+    });
+    if (kokoroBlend && selectedKokoro.length >= 2 && !sameKokoroGender(selectedKokoro)) {
+      setKokoroBlend(false);
+    }
+  }, [selectedKokoro, kokoroBlend]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error" || job.status === "cancelled") return;
@@ -924,6 +974,8 @@ export default function App() {
               text: markdown,
               mode: "kokoro",
               speakers: selectedKokoro,
+              blend: blendingKokoro,
+              blendWeights: blendingKokoro ? blendWeightsQuery(selectedKokoro, kokoroWeights) : undefined,
               stable: stableDub,
               temperature,
               verifyAsr: false,
@@ -991,13 +1043,52 @@ export default function App() {
   }
 
   function toggleKokoro(id: string) {
-    setSelectedKokoro((current) => toggleId(current, id, true));
+    setSelectedKokoro((current) => {
+      const next = toggleId(current, id, true);
+      if (kokoroBlend && next.length >= 2 && !sameKokoroGender(next)) setKokoroBlend(false);
+      return next;
+    });
   }
 
   function pickEngine(next: "qwen" | "kokoro") {
     setDubEngine(next);
     setCloneStudioOpen(false);
     if (next === "kokoro") setLanguage("English");
+    else setPhonemePreview(null);
+  }
+
+  async function onKokoroPhonemes() {
+    const text = markdown.trim();
+    if (!text) {
+      setMessage("请先填写文稿");
+      return;
+    }
+    setPhonemeBusy(true);
+    setMessage("");
+    try {
+      const british = Boolean(selectedKokoro[0]?.startsWith("b"));
+      setPhonemePreview(await previewKokoroPhonemes(text, british));
+    } catch (error) {
+      setPhonemePreview(null);
+      setMessage(error instanceof Error ? error.message : "无法转写读音");
+    } finally {
+      setPhonemeBusy(false);
+    }
+  }
+
+  function applyKokoroAnnotated(annotated: string) {
+    const next = annotated.trim();
+    if (!next) return;
+    setMarkdown(next);
+    setEditorRev((n) => n + 1);
+    setMessage("已写入 Misaki 读音标注。改过的 /音标/ 才会换读音");
+  }
+
+  function onLanguageChange(next: string) {
+    setLanguage(next);
+    if (dubEngine === "kokoro" && next !== "English") {
+      pickEngine("qwen");
+    }
   }
 
   function toggleCloneVoice(id: string) {
@@ -1040,10 +1131,14 @@ export default function App() {
     }
   }
 
-  async function togglePlayKokoro(id: string) {
+  async function togglePlayKokoro(id: string | string[]) {
     const player = voicePlayerRef.current;
     if (!player) return;
-    const key = `kokoro:${id}`;
+    const ids = Array.isArray(id) ? id : [id];
+    const weightList = ids.length > 1 ? blendWeightsQuery(ids, kokoroWeights) : undefined;
+    const key = weightList
+      ? `kokoro:${ids.map((item, index) => `${item}:${weightList[index]}`).join(",")}`
+      : `kokoro:${ids.join(",")}`;
     if (playingVoiceId === key && !player.paused) {
       player.pause();
       setPlayingVoiceId(null);
@@ -1051,10 +1146,11 @@ export default function App() {
     }
     setMessage("");
     const needsFetch = !speakerPreviewUrls.current[key];
-    if (needsFetch) setPreviewingSpeaker(id);
+    const previewLabel = ids.length > 1 ? "blend" : ids[0];
+    if (needsFetch) setPreviewingSpeaker(previewLabel);
     try {
       if (needsFetch) {
-        speakerPreviewUrls.current[key] = await fetchKokoroPreview(id);
+        speakerPreviewUrls.current[key] = await fetchKokoroPreview(ids, weightList);
       }
       player.src = speakerPreviewUrls.current[key];
       await player.play();
@@ -1148,15 +1244,6 @@ export default function App() {
 
   function onDownloadZip(item: Job) {
     void onDownload(jobZipUrl(item), jobZipName(item));
-  }
-
-  function onDownloadFullTrack(item: Job) {
-    const segment = item.segments?.[0];
-    if (!jobNeedsZip(item) && segment?.url) {
-      void onDownload(withDownload(segment.url), wavName(segment.filename || jobFullTrackName(item)));
-      return;
-    }
-    void onDownload(jobFullTrackUrl(item), jobFullTrackName(item));
   }
 
   async function openHistory(id: string) {
@@ -1466,7 +1553,9 @@ export default function App() {
           </div>
           <p className="hint">
             {dubEngine === "kokoro"
-              ? "轻量英文旁白，固定音色，不能克隆或描述。生成时会卸掉 Qwen TTS。"
+              ? blendingKokoro
+                ? "已选同性音色会按滑条比例归一化后加性融成一个声音，只出一轨。关掉融合则每个音色各出一轨。"
+                : "轻量英文旁白，固定音色，不能克隆或描述。多选且同性时可勾选「融合音色」并调比例。生成时会卸掉 Qwen TTS。"
               : "预设、描述和克隆可以同时选。同一文稿会为每个已选音色各生成一段短音频。"}
           </p>
           <div className="roster">
@@ -1516,7 +1605,55 @@ export default function App() {
             <p className="hint">
               可多选。英文旁白，Apache 2.0 可商用。点「试听」听一句。
               {health?.kokoro_model_ready ? "" : " 当前还没下载 Kokoro 权重，请先运行 `make download-kokoro`。"}
+              {selectedKokoro.length >= 2 && !sameKokoroGender(selectedKokoro)
+                ? " 融合只支持同性音色，当前男女混选，每个音色仍会各出一轨。"
+                : ""}
             </p>
+            <div className="blend-row">
+              <label
+                className="check"
+                title={
+                  canBlendKokoro
+                    ? "按滑条比例把已选音色向量归一化后加性融成一个声音"
+                    : selectedKokoro.length < 2
+                      ? "至少选两个同性音色才能融合"
+                      : "融合只支持同性音色"
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={kokoroBlend && canBlendKokoro}
+                  disabled={!canBlendKokoro}
+                  onChange={(e) => setKokoroBlend(e.target.checked)}
+                />
+                融合已选音色
+              </label>
+              <button
+                type="button"
+                className="ghost mini"
+                disabled={
+                  !blendingKokoro || health?.kokoro_model_ready === false || previewingSpeaker !== null
+                }
+                onClick={() => void togglePlayKokoro(selectedKokoro)}
+              >
+                {previewingSpeaker === "blend"
+                  ? "生成中…"
+                  : playingVoiceId ===
+                      `kokoro:${selectedKokoro.map((id) => `${id}:${kokoroWeight(id, kokoroWeights)}`).join(",")}`
+                    ? "暂停"
+                    : "试听融合"}
+              </button>
+            </div>
+            {blendingKokoro ? (
+              <BlendSliders
+                voices={selectedKokoro.map((id) => ({
+                  id,
+                  label: kokoroVoices.find((item) => item.id === id)?.label || id,
+                }))}
+                weights={kokoroWeights}
+                onWeight={(id, value) => setKokoroWeights((current) => ({ ...current, [id]: value }))}
+              />
+            ) : null}
             <div className="speaker-grid">
               {kokoroVoices.map((item) => (
                 <div key={item.id} className={selectedKokoro.includes(item.id) ? "speaker-card on" : "speaker-card"}>
@@ -1727,8 +1864,7 @@ export default function App() {
                 语言
                 <select
                   value={language}
-                  disabled={dubEngine === "kokoro"}
-                  onChange={(e) => setLanguage(e.target.value)}
+                  onChange={(e) => onLanguageChange(e.target.value)}
                 >
                   {languages.map((item) => (
                     <option key={item.id} value={item.id}>
@@ -1781,7 +1917,9 @@ export default function App() {
               <TempSlider value={temperature} onChange={setTemperature} />
             </div>
             <p className="hint hint-compact">
-              {verifyAsr
+              {dubEngine === "kokoro"
+                ? "可用 [nine](/nˈIn/) 指定读音。点「看读音」看默认音标；原样写入不会改变听感。"
+                : verifyAsr
                 ? "配完会切到转写模型听一遍，对不上的句子再配一次。时间会更长。"
                 : stableDub
                 ? "Markdown 一项一段。zip 包名是列表名 + 音色 + 时间；里面每段是「文稿 - 音色.wav」，同一句重配会覆盖。"
@@ -1816,6 +1954,11 @@ export default function App() {
               <button type="button" className="ghost" onClick={tidyNumbers}>
                 整理编号
               </button>
+              {dubEngine === "kokoro" ? (
+                <button type="button" className="ghost" disabled={phonemeBusy || !markdown.trim()} onClick={() => void onKokoroPhonemes()}>
+                  {phonemeBusy ? "转写中…" : "看读音"}
+                </button>
+              ) : null}
               <FileField
                 label=""
                 accept=".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
@@ -1825,6 +1968,9 @@ export default function App() {
               />
               <span>{filledSegments.length} 段</span>
             </div>
+            {dubEngine === "kokoro" && phonemePreview ? (
+              <PhonemeEditor data={phonemePreview} onApply={applyKokoroAnnotated} />
+            ) : null}
             <FoldSection
               title="分段预览"
               badge={`${filledSegments.length} 段`}
@@ -1868,7 +2014,9 @@ export default function App() {
               >
                 {busy
                   ? "提交中…"
-                  : `分段配音（${filledSegments.length} 段${voiceCount > 1 ? ` × ${voiceCount} 音色` : ""}）`}
+                  : blendingKokoro
+                    ? `分段配音（${filledSegments.length} 段 · 融合）`
+                    : `分段配音（${filledSegments.length} 段${voiceCount > 1 ? ` × ${voiceCount} 音色` : ""}）`}
               </button>
             )}
           </form>
@@ -1880,8 +2028,8 @@ export default function App() {
         </header>
         <p className="hint">
           {API_BASE
-            ? "成片在 Mac 的 data/output/。zip：列表名 + 音色 + 时间；里面每段「文稿 - 音色.wav」，同句重配即覆盖。"
-            : "zip 包名是列表名 + 音色 + 时间；分段是「文稿 - 音色.wav」，同句重配会覆盖。整轨按编号拼接。试听 16-bit，下载 24-bit。"}
+            ? "成片在 Mac 的 data/output/。多音色会各出一条完整轨，不要混在一个文件里。"
+            : "多音色会在列表里展开成多条完整轨，各自试听和下载。分段仍可打包成 zip。"}
         </p>
         {history.length ? (
           <FoldSection
@@ -1892,12 +2040,15 @@ export default function App() {
             className="history-fold"
           >
             <div className="history-list clips">
-              {history.map((item) => (
+              {history.map((item) => {
+                const tracks = jobVoiceTracks(item);
+                const multi = item.status === "done" && tracks.length > 1;
+                return (
                 <div key={item.id} className={job?.id === item.id ? "media-card on" : "media-card"}>
                   <AudioRow
                     label={item.title || item.id}
                     title={historyHint(item)}
-                    src={item.status === "done" ? item.download_url || undefined : undefined}
+                    src={item.status === "done" && !multi ? item.download_url || tracks[0]?.url : undefined}
                     onLabelClick={() => void openHistory(item.id)}
                     actions={
                       jobActive(item.status) ? (
@@ -1912,19 +2063,23 @@ export default function App() {
                       ) : item.status === "done" ? (
                         <>
                           {jobNeedsZip(item) ? (
-                            <>
-                              <button type="button" className="ghost mini" onClick={() => void onDownloadZip(item)}>
-                                打包分段
-                              </button>
-                              <button type="button" className="ghost mini" onClick={() => void onDownloadFullTrack(item)}>
-                                下载整轨
-                              </button>
-                            </>
-                          ) : (
-                            <button type="button" className="ghost mini" onClick={() => void onDownloadFullTrack(item)}>
+                            <button type="button" className="ghost mini" onClick={() => void onDownloadZip(item)}>
+                              打包分段
+                            </button>
+                          ) : !multi ? (
+                            <button
+                              type="button"
+                              className="ghost mini"
+                              onClick={() =>
+                                void onDownload(
+                                  withDownload(tracks[0]?.url || item.download_url || ""),
+                                  wavName(tracks[0]?.filename || item.download_name || item.title || item.id),
+                                )
+                              }
+                            >
                               下载
                             </button>
-                          )}
+                          ) : null}
                           <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
                             删除
                           </button>
@@ -1932,8 +2087,10 @@ export default function App() {
                       ) : null
                     }
                   />
+                  {multi ? <TrackList job={item} tracks={tracks} onDownload={onDownload} /> : null}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </FoldSection>
         ) : (
@@ -1970,13 +2127,13 @@ export default function App() {
             {job.status === "done" && job.local_dir && !API_BASE ? (
               <p className="hint">本机目录 {job.local_dir} · zip「列表名 - 音色 - 时间」· 分段「文稿 - 音色.wav」</p>
             ) : null}
+            {job.status === "done" && jobVoiceTracks(job).length ? (
+              <TrackList job={job} tracks={jobVoiceTracks(job)} onDownload={onDownload} />
+            ) : null}
             {job.status === "done" && jobNeedsZip(job) ? (
               <div className="tracks">
                 <button type="button" className="ghost" onClick={() => void onDownloadZip(job)}>
                   打包全部分段
-                </button>
-                <button type="button" className="ghost" onClick={() => void onDownloadFullTrack(job)}>
-                  下载整轨
                 </button>
               </div>
             ) : null}

@@ -5,6 +5,7 @@ from typing import Optional
 
 from . import voices
 from .config import DEFAULT_KOKORO_VOICE, DEFAULT_SPEAKER, KOKORO_VOICE_BY_ID, SPEAKER_BY_ID
+from .kokoro import parse_blend_weights, require_same_gender
 
 
 def parse_id_list(*values: Optional[str]) -> list[str]:
@@ -77,13 +78,28 @@ def clone_voices(ids: list[str], ref_audio: str = "", ref_text: str = "") -> lis
     raise ValueError("Select a saved clone voice or upload reference audio")
 
 
-def kokoro_voices(ids: list[str]) -> list[dict]:
+def kokoro_voices(ids: list[str], *, blend: bool = False, weights=None) -> list[dict]:
     result = []
     for voice_id in ids:
         if voice_id not in KOKORO_VOICE_BY_ID:
             raise ValueError(f"Unknown Kokoro voice: {voice_id}")
         meta = KOKORO_VOICE_BY_ID[voice_id]
         result.append({"id": voice_id, "name": meta["label"], "kind": "kokoro"})
+    if blend and len(result) >= 2:
+        selected = [item["id"] for item in result]
+        require_same_gender(selected)
+        parsed = parse_blend_weights(selected, weights)
+        labels = [item["name"] for item in result]
+        return [
+            {
+                "id": ",".join(selected),
+                "name": " + ".join(labels),
+                "kind": "kokoro",
+                "blend": True,
+                "voices": selected,
+                "weights": parsed,
+            }
+        ]
     return result
 
 
@@ -99,11 +115,14 @@ def assemble_job_voices(
     style_instruct: Optional[str] = None,
     ref_audio: str = "",
     ref_text: str = "",
+    blend: bool = False,
+    blend_weights=None,
 ) -> tuple[str, list[dict], str, str, str, str]:
     if mode == "kokoro":
         ids = parse_id_list(speakers, speaker, voice_id)
-        job_voices = kokoro_voices(ids or [DEFAULT_KOKORO_VOICE])
-        speaker_id = str(job_voices[0]["id"])
+        job_voices = kokoro_voices(ids or [DEFAULT_KOKORO_VOICE], blend=blend, weights=blend_weights)
+        first = job_voices[0]
+        speaker_id = str((first.get("voices") or [first["id"]])[0])
         return "kokoro", job_voices, speaker_id, "", "", ""
 
     preset_ids = parse_id_list(speakers, speaker)

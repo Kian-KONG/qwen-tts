@@ -53,6 +53,27 @@ source "$ROOT/mlx-tts-env/bin/activate"
   --extra-index-url "$UV_EXTRA_INDEX_URL" \
   -r "$ROOT/backend/requirements.txt"
 
+if python -c "import spacy; raise SystemExit(0 if spacy.util.is_package('en_core_web_sm') else 2)"; then
+  echo "spaCy model en_core_web_sm already present"
+else
+  echo "Downloading spaCy model en_core_web_sm for Kokoro English G2P ..."
+  mkdir -p "$ROOT/.cache"
+  WHEEL="$ROOT/.cache/en_core_web_sm-3.8.0-py3-none-any.whl"
+  GH_URL="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+  GOT=0
+  for url in "https://ghfast.top/${GH_URL}" "$GH_URL"; do
+    if curl -fL --connect-timeout 15 --max-time 90 -o "$WHEEL" "$url"; then
+      GOT=1
+      break
+    fi
+  done
+  if [[ "$GOT" -ne 1 ]]; then
+    echo "Failed to download en_core_web_sm. Retry: make setup"
+    exit 1
+  fi
+  "$UV_BIN" pip install --python "$ROOT/mlx-tts-env/bin/python" --no-deps "$WHEEL"
+fi
+
 mkdir -p "$ROOT/models" "$ROOT/data/voices" "$ROOT/data/scripts" "$ROOT/data/output"
 echo "Setup complete on Apple Silicon / MLX."
 echo "Next: make download"
