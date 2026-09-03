@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import threading
@@ -165,6 +166,138 @@ def english_g2p(*, british: bool = False):
         return _g2p_cache[british]
 
 
+# Isolated A is tagged DT → ɐ (article). Force letter names instead.
+_ISOLATED_LETTER = re.compile(
+    r"^(?:\[([A-Za-z])\]\(/[^)]*/\)|([A-Za-z]))[。.!?！？,，、;；:：'\"”’)\]]*$"
+)
+_US_LETTER_NAMES = {
+    "A": "ˈA",
+    "B": "bˈi",
+    "C": "sˈi",
+    "D": "dˈi",
+    "E": "ˈi",
+    "F": "ˈɛf",
+    "G": "ʤˈi",
+    "H": "ˈAʧ",
+    "I": "ˈI",
+    "J": "ʤˈA",
+    "K": "kˈA",
+    "L": "ˈɛl",
+    "M": "ˈɛm",
+    "N": "ˈɛn",
+    "O": "ˈO",
+    "P": "pˈi",
+    "Q": "kjˈu",
+    "R": "ˈɑɹ",
+    "S": "ˈɛs",
+    "T": "tˈi",
+    "U": "jˈu",
+    "V": "vˈi",
+    "W": "dˈʌbᵊlju",
+    "X": "ˈɛks",
+    "Y": "wˈI",
+    "Z": "zˈi",
+}
+_GB_LETTER_NAMES = {
+    **_US_LETTER_NAMES,
+    "B": "bˈiː",
+    "C": "sˈiː",
+    "D": "dˈiː",
+    "E": "ˈiː",
+    "G": "ʤˈiː",
+    "O": "ˈQ",
+    "P": "pˈiː",
+    "Q": "kjˈuː",
+    "R": "ˈɑː",
+    "T": "tˈiː",
+    "U": "jˈuː",
+    "V": "vˈiː",
+    "W": "dˈʌbᵊljuː",
+    "Z": "zˈiː",
+}
+
+
+def isolated_letter(text: str) -> str | None:
+    match = _ISOLATED_LETTER.match((text or "").strip())
+    if not match:
+        return None
+    return match.group(1) or match.group(2)
+
+
+def letter_name_phonemes(letter: str, *, british: bool = False) -> str:
+    table = _GB_LETTER_NAMES if british else _US_LETTER_NAMES
+    return table[letter.upper()]
+
+
+def spell_letter_clip(text: str, *, british: bool = False) -> str:
+    """Read a lone A–Z (or a line of them) as letter names, not the article/pronoun."""
+    raw = text or ""
+    stripped = raw.strip()
+    if not stripped:
+        return raw
+    parts = re.findall(r"\S+|\s+", stripped)
+    words = [part for part in parts if not part.isspace()]
+    if not words or not all(isolated_letter(part) for part in words):
+        return raw
+    spelled: list[str] = []
+    for part in parts:
+        if part.isspace():
+            spelled.append(part)
+            continue
+        grapheme = isolated_letter(part) or part
+        spelled.append(f"[{grapheme}](/{letter_name_phonemes(grapheme, british=british)}/)")
+    return "".join(spelled)
+
+
+def single_letter_clip(text: str, *, british: bool = False) -> str | None:
+    """Bare A–Z (or default letter-name markup). Custom /phonemes/ stay as written."""
+    stripped = (text or "").strip()
+    letter = isolated_letter(stripped)
+    if not letter:
+        return None
+    marked = re.match(r"^\[([A-Za-z])\]\(/([^)]*)/\)[。.!?！？]*$", stripped)
+    if marked:
+        expected = letter_name_phonemes(marked.group(1), british=british)
+        if marked.group(2) != expected:
+            return None
+    return letter.upper()
+
+
+def _token_letter(token: Any) -> str | None:
+    letters = re.sub(r"[^A-Za-z]", "", str(getattr(token, "text", "") or ""))
+    if len(letters) != 1:
+        return None
+    return letters.upper()
+
+
+def crop_letter_wave(wave: np.ndarray, sample_rate: int, tokens: list | None, letter: str) -> np.ndarray | None:
+    """Cut on token timestamps only. Keep the whole letter; do not eat the onset."""
+    if wave.size == 0 or sample_rate <= 0 or not tokens:
+        return None
+    index = None
+    target = None
+    for i, token in enumerate(tokens):
+        if _token_letter(token) == letter.upper() and getattr(token, "start_ts", None) is not None:
+            index = i
+            target = token
+    if target is None:
+        return None
+    start_t = float(target.start_ts)
+    prev = tokens[index - 1] if index else None
+    if prev is not None and getattr(prev, "end_ts", None) is not None and _token_letter(prev) is None:
+        pause_end = float(prev.end_ts)
+        if pause_end <= start_t:
+            start_t = pause_end
+    start = max(0, int((start_t - 0.012) * sample_rate))
+    end = min(wave.size, int((float(target.end_ts) + 0.09) * sample_rate))
+    if end - start < int(sample_rate * 0.12):
+        start = max(0, int(float(target.start_ts) * sample_rate))
+        end = min(wave.size, int((float(target.end_ts) + 0.09) * sample_rate))
+    if end - start < int(sample_rate * 0.12):
+        return None
+    return audio_util.fade_edges(wave[start:end], sample_rate, 8.0)
+
+
 def _annotate_token(text: str, phonemes: str | None) -> str:
     word = text or ""
     ps = (phonemes or "").strip()
@@ -174,7 +307,7 @@ def _annotate_token(text: str, phonemes: str | None) -> str:
 
 
 def phonemize_text(text: str, *, british: bool = False) -> dict:
-    raw = (text or "").strip()
+    raw = spell_letter_clip((text or "").strip(), british=british)
     if not raw:
         return {"text": "", "phonemes": "", "annotated": "", "tokens": []}
     g2p = english_g2p(british=british)
@@ -285,6 +418,10 @@ class KokoroEngine:
         weights: list[float] | None = None,
     ) -> tuple[np.ndarray, int]:
         ids = parse_kokoro_voice_ids(",".join(voice_id) if isinstance(voice_id, list) else voice_id)
+        british = kokoro_lang_code(ids[0]) == "b"
+        letter = single_letter_clip(text, british=british)
+        if not letter:
+            text = spell_letter_clip(text, british=british)
         blend_path: Path | None = None
         if len(ids) > 1:
             blend_path = write_blended_voice(ids, weights)
@@ -298,30 +435,43 @@ class KokoroEngine:
         rate = self.sample_rate
         lang = kokoro_lang_code(ids[0])
         try:
-            pipeline = self.model._get_pipeline(lang)
-            pipeline.voices = {}
-            for result in pipeline(text, voice=voice_arg, speed=1.0, split_pattern=r"\n+"):
-                audio = result.audio
-                ps = str(result.phonemes or "")
-                if audio is not None and len(ps) < 20:
-                    pack_t = pipeline.load_voice(voice_arg)
-                    padded = f" {ps} "
-                    n = int(pack_t.shape[0])
-                    idx = min(max(len(padded) - 1, 40), n - 1)
-                    out = pipeline.model(padded, pack_t[idx], 1.0, return_output=True)
-                    audio = out.audio
-                if audio is None:
-                    continue
-                wave = self._wave_from_audio(audio)
-                rate = int(getattr(self.model, "sample_rate", rate) or rate)
+            if letter:
+                wave, rate = self._generate_letter(letter, voice_arg, lang)
                 if wave.size:
                     parts.append(wave)
+            else:
+                for item in self.model.generate(
+                    text=text,
+                    voice=voice_arg,
+                    lang_code=lang,
+                    speed=1.0,
+                    split_pattern=r"\n+",
+                ):
+                    wave = self._wave_from_audio(item.audio)
+                    rate = int(getattr(item, "sample_rate", rate) or rate)
+                    if wave.size:
+                        parts.append(wave)
         finally:
             if blend_path:
                 blend_path.unlink(missing_ok=True)
         if not parts:
             raise RuntimeError(f"No audio generated for {','.join(ids)}")
         return (np.concatenate(parts) if len(parts) > 1 else parts[0], rate)
+
+    def _generate_letter(self, letter: str, voice_arg: str, lang: str) -> tuple[np.ndarray, int]:
+        pipeline = self.model._get_pipeline(lang)
+        pipeline.voices = {}
+        carrier = f"Letter. {letter}."
+        rate = self.sample_rate
+        for result in pipeline(carrier, voice=voice_arg, speed=1.0, split_pattern=None):
+            wave = self._wave_from_audio(result.audio)
+            rate = int(getattr(self.model, "sample_rate", rate) or rate)
+            cropped = crop_letter_wave(wave, rate, result.tokens, letter)
+            if cropped is not None and cropped.size:
+                return cropped, rate
+            if wave.size:
+                return wave, rate
+        raise RuntimeError(f"No audio generated for letter {letter}")
 
     def synthesize(
         self,
@@ -390,10 +540,12 @@ class KokoroEngine:
                         spoken = audio_util.normalize_tts_text(chunk)
                         audio, rate = self._generate_one(spoken, voice_ids, voice.get("weights"))
                         native_sr = rate
+                        letter = single_letter_clip(spoken, british=kokoro_lang_code(voice_ids[0]) == "b")
                         wav = audio_util.polish_clip(
                             audio,
                             rate,
-                            short=audio_util.is_short_clip(spoken, audio, rate),
+                            short=False if letter else audio_util.is_short_clip(spoken, audio, rate),
+                            pad_ms=80 if letter else None,
                         )
                         wavs.append(wav)
                         if progress_cb:

@@ -1918,7 +1918,7 @@ export default function App() {
             </div>
             <p className="hint hint-compact">
               {dubEngine === "kokoro"
-                ? "可用 [nine](/nˈIn/) 指定读音。点「看读音」看默认音标；原样写入不会改变听感。"
+                ? "单独一行的 A–Z 会读字母名（A 是 ay，不是冠词 a）。也可用 [nine](/nˈIn/) 指定读音。"
                 : verifyAsr
                 ? "配完会切到转写模型听一遍，对不上的句子再配一次。时间会更长。"
                 : stableDub
