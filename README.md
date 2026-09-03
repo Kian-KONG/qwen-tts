@@ -5,6 +5,7 @@
 - **预设说话人**（CustomVoice）：点选 Ryan / Vivian 等 9 个官方音色，贴文字即可配
 - **描述音色**（VoiceDesign）：写一段声音描述造音色
 - **声音克隆**（Base）：3–10 秒参考音频 + 逐字稿，保存在本机 `data/voices/` 可反复选用
+- **轻量英文**（Kokoro-82M）：Apache 2.0 英文旁白，和 Qwen3 并列切换，不能克隆
 - **语音转文字**（Qwen3-ASR 1.7B）：上传音频生成文稿或克隆逐字稿
 - **实时翻译字幕**：麦克风或会议播放声音短窗听写后用 Qwen3-1.7B 译成目标语，可弹出字幕窗，和配音队列分开
 - **Excel 导入**：每个非空单元格一段语音，按编号配音
@@ -25,6 +26,7 @@ make download-design
 make download-custom
 make download-asr
 make download-instruct
+make download-kokoro
 make start
 ```
 
@@ -42,6 +44,7 @@ make start
 | `make download-custom` | 拉 CustomVoice bf16（预设说话人） |
 | `make download-asr` | 拉 Qwen3-ASR 1.7B bf16（语音转文字） |
 | `make download-instruct` | 拉 Qwen3-1.7B bf16（实时翻译字幕） |
+| `make download-kokoro` | 拉 Kokoro-82M bf16（轻量英文配音） |
 | `make start` | 打包前端并由 FastAPI 提供 |
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |
@@ -92,6 +95,18 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 ```
 
 可选 `instruct` 只控制语气（如 `Very happy.`），不会改成另一种音色。
+
+## 轻量英文（Kokoro）
+
+`make download-kokoro` 后，配音页切到 **Kokoro**。固定英文音色（Heart / Bella / Adam 等），适合批量旁白，Apache 2.0 可商用。不能克隆或描述音色。生成时会卸掉 Qwen TTS。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/jobs \
+  -F "text=1. Hello from Kokoro." \
+  -F "mode=kokoro" \
+  -F "speakers=af_heart,am_adam" \
+  -F "language=English"
+```
 
 ## 描述音色（不用克隆）
 

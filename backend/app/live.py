@@ -38,7 +38,11 @@ class LiveTranslateSession:
             self.active = True
         try:
             with engine.lock:
+                from .kokoro import kokoro_engine
+
                 engine.unload_unlocked()
+                with kokoro_engine.lock:
+                    kokoro_engine.unload_unlocked()
                 with asr_engine.lock:
                     asr_engine._load_unlocked()
                 with instruct_engine.lock:

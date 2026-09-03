@@ -41,8 +41,11 @@ class InstructEngine:
         if not is_local_model_dir(INSTRUCT_MODEL_DIR):
             raise FileNotFoundError("Qwen3 Instruct model is missing. Run: make download-instruct")
         from mlx_lm import load
+        from .kokoro import kokoro_engine
 
         engine.unload_unlocked()
+        with kokoro_engine.lock:
+            kokoro_engine.unload_unlocked()
         self.unload_unlocked()
         self.model_path = str(INSTRUCT_MODEL_DIR)
         self.model, self.tokenizer = load(self.model_path)

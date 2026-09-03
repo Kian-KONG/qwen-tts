@@ -120,27 +120,42 @@ class JobRunner:
                     current.stage = name
                     current.stats["stage"] = name
 
-                job.stats = engine.synthesize(
-                    job.text,
-                    job.ref_audio,
-                    job.ref_text,
-                    batch_size=job.batch_size,
-                    language=job.language,
-                    job_id=job.id,
-                    mode=job.mode,
-                    instruct=job.instruct,
-                    speaker=job.speaker,
-                    voices=job.voices or None,
-                    stable=job.stable,
-                    temperature=job.temperature,
-                    script_name=job.script_name,
-                    created_at=job.created_at,
-                    progress_cb=on_progress,
-                    cancel_check=cancel_check,
-                )
+                if job.mode == "kokoro":
+                    from .kokoro import kokoro_engine
+
+                    job.stats = kokoro_engine.synthesize(
+                        job.text,
+                        batch_size=job.batch_size,
+                        language=job.language or "English",
+                        job_id=job.id,
+                        voices=job.voices or None,
+                        script_name=job.script_name,
+                        created_at=job.created_at,
+                        progress_cb=on_progress,
+                        cancel_check=cancel_check,
+                    )
+                else:
+                    job.stats = engine.synthesize(
+                        job.text,
+                        job.ref_audio,
+                        job.ref_text,
+                        batch_size=job.batch_size,
+                        language=job.language,
+                        job_id=job.id,
+                        mode=job.mode,
+                        instruct=job.instruct,
+                        speaker=job.speaker,
+                        voices=job.voices or None,
+                        stable=job.stable,
+                        temperature=job.temperature,
+                        script_name=job.script_name,
+                        created_at=job.created_at,
+                        progress_cb=on_progress,
+                        cancel_check=cancel_check,
+                    )
                 if job.cancel_event.is_set():
                     raise JobCancelled("已终止")
-                if job.verify_asr:
+                if job.verify_asr and job.mode != "kokoro":
                     from .verify import run_verify_round
 
                     job.stage = "asr"

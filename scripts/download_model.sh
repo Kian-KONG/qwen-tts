@@ -29,8 +29,12 @@ case "$KIND" in
     DEST="$ROOT/models/qwen3-instruct"
     MODEL_ID="mlx-community/Qwen3-1.7B-bf16"
     ;;
+  kokoro)
+    DEST="$ROOT/models/kokoro"
+    MODEL_ID="mlx-community/Kokoro-82M-bf16"
+    ;;
   *)
-    echo "Usage: $0 [base|design|custom|asr|asr-0.6b|instruct]"
+    echo "Usage: $0 [base|design|custom|asr|asr-0.6b|instruct|kokoro]"
     exit 1
     ;;
 esac
@@ -54,11 +58,13 @@ if [[ -f "$ROOT/mlx-tts-env/bin/activate" ]]; then
   source "$ROOT/mlx-tts-env/bin/activate"
 fi
 
-echo "Trying ModelScope for $MODEL_ID ..."
+echo "Trying ModelScope (${MODELSCOPE_ENDPOINT}) for $MODEL_ID ..."
 set +e
 python - <<'PY'
 import os
 import sys
+
+os.environ.setdefault("MODELSCOPE_ENDPOINT", "https://www.modelscope.cn")
 
 try:
     from modelscope.hub.snapshot_download import snapshot_download

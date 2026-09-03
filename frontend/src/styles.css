@@ -905,6 +905,16 @@ label {
   color: var(--accent-ink);
 }
 
+.engine-switch {
+  margin: 0 0 10px;
+}
+
+.engine-switch button {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
 .speaker-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

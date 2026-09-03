@@ -19,10 +19,13 @@ from .config import (
     BATCH_SIZE,
     CUSTOM_MODEL_DIR,
     CUSTOM_MODEL_ID,
+    DEFAULT_KOKORO_VOICE,
     DEFAULT_SPEAKER,
     DESIGN_MODEL_DIR,
     DESIGN_MODEL_ID,
     FRONTEND_DIST,
+    KOKORO_MODEL_ID,
+    KOKORO_VOICES,
     LANGUAGE,
     LANGUAGES,
     LANGUAGE_BY_ID,
@@ -40,6 +43,7 @@ from .engine import engine
 from .job_assets import full_wav, segment_wav, track_wav, zip_bytes
 from .job_repo import JobBusy, delete_job, get_public, item_list, list_public
 from .jobs import public_job, runner
+from .kokoro import is_kokoro_ready, kokoro_engine
 from .live import live_session, save_upload
 from .modes import parse_mode
 from .paths import is_local_model_dir
@@ -179,6 +183,8 @@ def _assemble_job_voices(
 
 
 def _current_model_id() -> str:
+    if kokoro_engine.loaded:
+        return KOKORO_MODEL_ID
     if engine.mode == "design":
         return DESIGN_MODEL_ID
     if engine.mode == "preset":
@@ -191,6 +197,12 @@ def _normalize_language(language: str | None) -> str:
     if value not in LANGUAGE_BY_ID:
         raise HTTPException(status_code=400, detail=f"Unsupported language: {value}")
     return value
+
+
+def _job_language(mode: str, language: str | None) -> str:
+    if mode == "kokoro":
+        return "English"
+    return _normalize_language(language)
 
 
 def _form_flag(value: Optional[str], default: bool = True) -> bool:
@@ -265,8 +277,11 @@ def health():
         "instruct_model_id": INSTRUCT_MODEL_ID,
         "instruct_model_ready": is_local_model_dir(INSTRUCT_MODEL_DIR),
         "instruct_loaded": instruct_engine.loaded,
+        "kokoro_model_id": KOKORO_MODEL_ID,
+        "kokoro_model_ready": is_kokoro_ready(),
+        "kokoro_loaded": kokoro_engine.loaded,
         "live_translate_active": live_session.active,
-        "current_mode": engine.mode,
+        "current_mode": "kokoro" if kokoro_engine.loaded else engine.mode,
         "default_speaker": DEFAULT_SPEAKER,
         "batch_size": BATCH_SIZE,
         "languages": LANGUAGES,
@@ -303,6 +318,31 @@ def api_voices():
 @app.get("/api/speakers")
 def api_speakers():
     return {"data": SPEAKERS, "default": DEFAULT_SPEAKER}
+
+
+@app.get("/api/kokoro/voices")
+def api_kokoro_voices():
+    return {"data": KOKORO_VOICES, "default": DEFAULT_KOKORO_VOICE, "ready": is_kokoro_ready()}
+
+
+@app.get("/api/kokoro/voices/{voice_id}/preview")
+def api_kokoro_preview(voice_id: str):
+    if live_session.active:
+        raise HTTPException(status_code=409, detail="实时翻译进行中，请先停止")
+    try:
+        path = kokoro_engine.preview_voice(voice_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Kokoro voice not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return FileResponse(
+        audio_util.browser_wav(path),
+        media_type="audio/wav",
+        filename=f"{voice_id}.wav",
+        content_disposition_type="inline",
+    )
 
 
 @app.get("/api/speakers/{speaker_id}/preview")
@@ -611,7 +651,7 @@ async def api_create_job(
             ref_audio=audio_path,
             ref_text=transcript,
             batch_size=batch_size,
-            language=_normalize_language(language),
+            language=_job_language(job_mode, language),
             mode=job_mode,
             instruct=description,
             speaker=speaker_id,
@@ -661,7 +701,7 @@ def api_create_job_json(payload: JobRequest):
             ref_audio=audio_path,
             ref_text=transcript,
             batch_size=payload.batch_size,
-            language=_normalize_language(payload.language),
+            language=_job_language(job_mode, payload.language),
             mode=job_mode,
             instruct=description,
             speaker=speaker_id,

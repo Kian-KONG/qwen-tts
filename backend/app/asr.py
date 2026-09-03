@@ -52,8 +52,11 @@ class ASREngine:
         if not is_local_model_dir(ASR_MODEL_DIR):
             raise FileNotFoundError("Qwen3-ASR model is missing. Run: make download-asr")
         from mlx_audio.stt.utils import load_model
+        from .kokoro import kokoro_engine
 
         engine.unload_unlocked()
+        with kokoro_engine.lock:
+            kokoro_engine.unload_unlocked()
         self.unload_unlocked()
         self.model_path = str(ASR_MODEL_DIR)
         self.model = load_model(self.model_path)

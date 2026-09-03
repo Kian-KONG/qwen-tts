@@ -4,7 +4,7 @@ import json
 from typing import Optional
 
 from . import voices
-from .config import DEFAULT_SPEAKER, SPEAKER_BY_ID
+from .config import DEFAULT_KOKORO_VOICE, DEFAULT_SPEAKER, KOKORO_VOICE_BY_ID, SPEAKER_BY_ID
 
 
 def parse_id_list(*values: Optional[str]) -> list[str]:
@@ -77,6 +77,16 @@ def clone_voices(ids: list[str], ref_audio: str = "", ref_text: str = "") -> lis
     raise ValueError("Select a saved clone voice or upload reference audio")
 
 
+def kokoro_voices(ids: list[str]) -> list[dict]:
+    result = []
+    for voice_id in ids:
+        if voice_id not in KOKORO_VOICE_BY_ID:
+            raise ValueError(f"Unknown Kokoro voice: {voice_id}")
+        meta = KOKORO_VOICE_BY_ID[voice_id]
+        result.append({"id": voice_id, "name": meta["label"], "kind": "kokoro"})
+    return result
+
+
 def assemble_job_voices(
     mode: str,
     *,
@@ -90,6 +100,12 @@ def assemble_job_voices(
     ref_audio: str = "",
     ref_text: str = "",
 ) -> tuple[str, list[dict], str, str, str, str]:
+    if mode == "kokoro":
+        ids = parse_id_list(speakers, speaker, voice_id)
+        job_voices = kokoro_voices(ids or [DEFAULT_KOKORO_VOICE])
+        speaker_id = str(job_voices[0]["id"])
+        return "kokoro", job_voices, speaker_id, "", "", ""
+
     preset_ids = parse_id_list(speakers, speaker)
     clone_ids = parse_id_list(voice_ids)
     if voice_id:

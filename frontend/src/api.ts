@@ -99,6 +99,9 @@ export type Health = {
   instruct_model_id?: string;
   instruct_model_ready?: boolean;
   instruct_loaded?: boolean;
+  kokoro_model_id?: string;
+  kokoro_model_ready?: boolean;
+  kokoro_loaded?: boolean;
   live_translate_active?: boolean;
   current_mode?: "clone" | "design" | "preset" | string;
   default_speaker?: string;
@@ -297,6 +300,18 @@ export async function listSpeakers(): Promise<{ data: Speaker[]; default: string
   return { data: data.data ?? [], default: data.default ?? "Ryan" };
 }
 
+export async function listKokoroVoices(): Promise<{ data: Speaker[]; default: string; ready?: boolean }> {
+  const res = await request("/api/kokoro/voices");
+  const data = await res.json();
+  return { data: data.data ?? [], default: data.default ?? "af_heart", ready: data.ready };
+}
+
+export async function fetchKokoroPreview(id: string): Promise<string> {
+  const res = await request(`/api/kokoro/voices/${encodeURIComponent(id)}/preview`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 export async function listVoices(): Promise<Voice[]> {
   const res = await request("/api/voices");
   const data = await res.json();
@@ -405,7 +420,7 @@ export async function createJob(opts: {
   refText?: string;
   batchSize: number;
   language: string;
-  mode?: "clone" | "design" | "preset" | "mixed";
+  mode?: "clone" | "design" | "preset" | "mixed" | "kokoro";
   instruct?: string;
   speaker?: string;
   speakers?: string[];

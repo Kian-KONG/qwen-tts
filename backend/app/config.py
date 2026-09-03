@@ -37,6 +37,9 @@ INSTRUCT_MODEL_ID = os.getenv(
 INSTRUCT_MODEL_DIR = Path(
     os.getenv("QWEN_INSTRUCT_MODEL", ROOT / "models" / "qwen3-instruct")
 ).resolve()
+KOKORO_MODEL_ID = os.getenv("QWEN_KOKORO_MODEL_ID", "mlx-community/Kokoro-82M-bf16")
+KOKORO_MODEL_DIR = Path(os.getenv("QWEN_KOKORO_MODEL", ROOT / "models" / "kokoro")).resolve()
+DEFAULT_KOKORO_VOICE = os.getenv("QWEN_KOKORO_VOICE", "af_heart")
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
 SCRIPTS_DIR = Path(os.getenv("QWEN_TTS_SCRIPTS", ROOT / "data" / "scripts")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
@@ -94,6 +97,26 @@ SPEAKERS = [
     {"id": "Sohee", "label": "Sohee", "native": "Korean", "description": "情感丰富的韩语女声"},
 ]
 SPEAKER_BY_ID = {item["id"]: item for item in SPEAKERS}
+KOKORO_VOICES = [
+    {"id": "af_heart", "label": "Heart", "native": "US", "description": "默认女声，适合旁白"},
+    {"id": "af_bella", "label": "Bella", "native": "US", "description": "清晰美式女声"},
+    {"id": "af_nicole", "label": "Nicole", "native": "US", "description": "沉稳美式女声"},
+    {"id": "af_sarah", "label": "Sarah", "native": "US", "description": "柔和美式女声"},
+    {"id": "af_sky", "label": "Sky", "native": "US", "description": "年轻美式女声"},
+    {"id": "af_aoede", "label": "Aoede", "native": "US", "description": "明亮美式女声"},
+    {"id": "am_adam", "label": "Adam", "native": "US", "description": "沉稳美式男声"},
+    {"id": "am_michael", "label": "Michael", "native": "US", "description": "标准美式男声"},
+    {"id": "am_eric", "label": "Eric", "native": "US", "description": "自然美式男声"},
+    {"id": "am_liam", "label": "Liam", "native": "US", "description": "年轻美式男声"},
+    {"id": "am_puck", "label": "Puck", "native": "US", "description": "轻快美式男声"},
+    {"id": "bf_emma", "label": "Emma", "native": "UK", "description": "清晰英式女声"},
+    {"id": "bf_isabella", "label": "Isabella", "native": "UK", "description": "柔和英式女声"},
+    {"id": "bf_alice", "label": "Alice", "native": "UK", "description": "利落英式女声"},
+    {"id": "bm_george", "label": "George", "native": "UK", "description": "沉稳英式男声"},
+    {"id": "bm_daniel", "label": "Daniel", "native": "UK", "description": "标准英式男声"},
+    {"id": "bm_lewis", "label": "Lewis", "native": "UK", "description": "自然英式男声"},
+]
+KOKORO_VOICE_BY_ID = {item["id"]: item for item in KOKORO_VOICES}
 SPEAKER_PREVIEW = {
     "English": ("Hello, this is a preview of my voice.", "English"),
     "Chinese": ("你好，这是我的声音试听。", "Chinese"),
@@ -111,5 +134,6 @@ for path in (
     CUSTOM_MODEL_DIR.parent,
     ASR_MODEL_DIR.parent,
     INSTRUCT_MODEL_DIR.parent,
+    KOKORO_MODEL_DIR.parent,
 ):
     path.mkdir(parents=True, exist_ok=True)

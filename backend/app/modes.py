@@ -11,6 +11,8 @@ def parse_mode(mode: str | None, *, strict: bool = True) -> str:
         return "mixed"
     if value in {"clone", "base", "icl"}:
         return "clone"
+    if value in {"kokoro", "kokoro-82m", "light", "light_en"}:
+        return "kokoro"
     if strict:
         raise ValueError(f"Unsupported mode: {mode}")
     return "clone"

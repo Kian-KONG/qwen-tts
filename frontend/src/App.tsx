@@ -11,6 +11,7 @@ import {
   deleteScript,
   deleteVoice,
   downloadFile,
+  fetchKokoroPreview,
   fetchSpeakerPreview,
   getHealth,
   getJob,
@@ -19,6 +20,7 @@ import {
   importScript,
   listJobs,
   listLanguages,
+  listKokoroVoices,
   listScripts,
   listSpeakers,
   listVoices,
@@ -140,12 +142,15 @@ const VOICE_FOLD_KEY = "qwen-tts-voice-fold";
 const HISTORY_FOLD_KEY = "qwen-tts-history-fold";
 const PREVIEW_FOLD_KEY = "qwen-tts-preview-fold";
 const VOICES_COLLAPSE_KEY = "qwen-tts-voices-collapsed";
+const ENGINE_KEY = "qwen-tts-engine";
+const KOKORO_VOICES_KEY = "qwen-tts-kokoro-voices";
 
 const MODE_LABEL: Record<string, string> = {
   preset: "预设",
   design: "描述",
   clone: "克隆",
   mixed: "混合",
+  kokoro: "Kokoro",
 };
 
 const JOB_STATUS: Record<string, string> = {
@@ -259,6 +264,11 @@ export default function App() {
   const [language, setLanguage] = useState("Auto");
   const [voices, setVoices] = useState<Voice[]>([]);
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
+  const [dubEngine, setDubEngine] = useState<"qwen" | "kokoro">(() =>
+    stored(ENGINE_KEY, "qwen") === "kokoro" ? "kokoro" : "qwen",
+  );
+  const [kokoroVoices, setKokoroVoices] = useState<Speaker[]>([]);
+  const [selectedKokoro, setSelectedKokoro] = useState<string[]>(() => storedList(KOKORO_VOICES_KEY, ["af_heart"]));
   const [selectedSpeakers, setSelectedSpeakers] = useState<string[]>(() => storedList(SPEAKERS_KEY, ["Ryan"]));
   const [voiceId, setVoiceId] = useState(() => stored(VOICE_ID_KEY, "") || storedList(VOICE_IDS_KEY, [])[0] || "");
   const [selectedVoiceIds, setSelectedVoiceIds] = useState<string[]>(() => {
@@ -332,7 +342,19 @@ export default function App() {
   const filledSegments = useMemo(() => parseMarkdownList(markdown), [markdown]);
   const pendingClone = Boolean(!selectedVoiceIds.length && refFile && refText.trim());
   const roster = useMemo(() => {
-    const items: { key: string; kind: "preset" | "design" | "clone"; name: string; detail?: string; remove: () => void }[] = [];
+    if (dubEngine === "kokoro") {
+      return selectedKokoro.map((id) => {
+        const voice = kokoroVoices.find((item) => item.id === id);
+        return {
+          key: `kokoro:${id}`,
+          kind: "kokoro" as const,
+          name: voice?.label || id,
+          detail: voice?.description,
+          remove: () => setSelectedKokoro((current) => current.filter((item) => item !== id)),
+        };
+      });
+    }
+    const items: { key: string; kind: "preset" | "design" | "clone" | "kokoro"; name: string; detail?: string; remove: () => void }[] = [];
     for (const id of selectedSpeakers) {
       const speaker = speakers.find((item) => item.id === id);
       items.push({
@@ -362,28 +384,34 @@ export default function App() {
       });
     }
     return items;
-  }, [selectedSpeakers, speakers, designs, selectedVoiceIds, voices]);
-  const voiceCount = roster.length + (pendingClone ? 1 : 0);
+  }, [dubEngine, selectedKokoro, kokoroVoices, selectedSpeakers, speakers, designs, selectedVoiceIds, voices]);
+  const voiceCount = roster.length + (dubEngine === "kokoro" ? 0 : pendingClone ? 1 : 0);
 
   async function refresh() {
     try {
-      const [nextHealth, nextVoices, nextLanguages, nextSpeakers, nextScripts] = await Promise.all([
+      const [nextHealth, nextVoices, nextLanguages, nextSpeakers, nextKokoro, nextScripts] = await Promise.all([
         getHealth(),
         listVoices(),
         listLanguages(),
         listSpeakers(),
+        listKokoroVoices().catch(() => ({ data: [] as Speaker[], default: "af_heart" })),
         listScripts().catch(() => null),
       ]);
       setHealth(nextHealth);
       setVoices(nextVoices);
       setLanguages(nextLanguages);
       setSpeakers(nextSpeakers.data);
+      setKokoroVoices(nextKokoro.data);
       if (nextScripts) {
         setScripts(nextScripts);
         setActiveScriptId((current) => (current && nextScripts.some((item) => item.id === current) ? current : ""));
       }
       setScriptsReady(true);
       setSelectedSpeakers((current) => current.filter((id) => nextSpeakers.data.some((item) => item.id === id)));
+      setSelectedKokoro((current) => {
+        const next = current.filter((id) => nextKokoro.data.some((item) => item.id === id));
+        return next.length ? next : nextKokoro.data[0] ? [nextKokoro.data[0].id] : current;
+      });
       setSelectedVoiceIds((current) => current.filter((id) => nextVoices.some((item) => item.id === id)));
       setVoiceId((current) => {
         if (current && nextVoices.some((item) => item.id === current)) return current;
@@ -428,6 +456,8 @@ export default function App() {
       window.localStorage.setItem(DESIGNS_KEY, JSON.stringify(designs));
       window.localStorage.setItem(SIDEBAR_KEY, railCollapsed ? "1" : "0");
       window.localStorage.setItem(THEME_KEY, theme);
+      window.localStorage.setItem(ENGINE_KEY, dubEngine);
+      window.localStorage.setItem(KOKORO_VOICES_KEY, selectedKokoro.join(","));
       window.localStorage.setItem(VOICE_FOLD_KEY, voiceFold);
       window.localStorage.setItem(HISTORY_FOLD_KEY, historyOpen ? "1" : "0");
       window.localStorage.setItem(PREVIEW_FOLD_KEY, previewOpen ? "1" : "0");
@@ -435,7 +465,7 @@ export default function App() {
     } catch {
       /* ignore quota / private mode */
     }
-  }, [voiceId, selectedSpeakers, selectedVoiceIds, designs, railCollapsed, theme, voiceFold, historyOpen, previewOpen, voicesCollapsed]);
+  }, [voiceId, selectedSpeakers, selectedKokoro, selectedVoiceIds, designs, railCollapsed, theme, voiceFold, historyOpen, previewOpen, voicesCollapsed, dubEngine]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error" || job.status === "cancelled") return;
@@ -888,22 +918,35 @@ export default function App() {
       if (designs.length) kinds.push("design");
       if (selectedVoiceIds.length || pendingClone) kinds.push("clone");
       const jobMode = kinds.length > 1 ? "mixed" : kinds[0] || "preset";
-      const next = await createJob({
-        text: markdown,
-        mode: jobMode,
-        speakers: selectedSpeakers,
-        designs,
-        styleInstruct: styleInstruct || undefined,
-        stable: stableDub,
-        temperature,
-        verifyAsr,
-        voiceIds: selectedVoiceIds.length ? selectedVoiceIds : undefined,
-        refAudio: pendingClone ? refFile || undefined : undefined,
-        refText: pendingClone ? refText : undefined,
-        batchSize,
-        language,
-        scriptName: scriptName.trim() || "文稿",
-      });
+      const next =
+        dubEngine === "kokoro"
+          ? await createJob({
+              text: markdown,
+              mode: "kokoro",
+              speakers: selectedKokoro,
+              stable: stableDub,
+              temperature,
+              verifyAsr: false,
+              batchSize,
+              language: "English",
+              scriptName: scriptName.trim() || "文稿",
+            })
+          : await createJob({
+              text: markdown,
+              mode: jobMode,
+              speakers: selectedSpeakers,
+              designs,
+              styleInstruct: styleInstruct || undefined,
+              stable: stableDub,
+              temperature,
+              verifyAsr,
+              voiceIds: selectedVoiceIds.length ? selectedVoiceIds : undefined,
+              refAudio: pendingClone ? refFile || undefined : undefined,
+              refText: pendingClone ? refText : undefined,
+              batchSize,
+              language,
+              scriptName: scriptName.trim() || "文稿",
+            });
       setJob(next);
       try {
         window.localStorage.setItem(JOB_ID_KEY, next.id);
@@ -947,6 +990,16 @@ export default function App() {
     setSelectedSpeakers((current) => toggleId(current, id));
   }
 
+  function toggleKokoro(id: string) {
+    setSelectedKokoro((current) => toggleId(current, id, true));
+  }
+
+  function pickEngine(next: "qwen" | "kokoro") {
+    setDubEngine(next);
+    setCloneStudioOpen(false);
+    if (next === "kokoro") setLanguage("English");
+  }
+
   function toggleCloneVoice(id: string) {
     setSelectedVoiceIds((current) => toggleId(current, id));
     setVoiceId(id);
@@ -984,6 +1037,33 @@ export default function App() {
     } catch (error) {
       setPlayingVoiceId(null);
       setMessage(error instanceof Error ? error.message : "无法播放音色");
+    }
+  }
+
+  async function togglePlayKokoro(id: string) {
+    const player = voicePlayerRef.current;
+    if (!player) return;
+    const key = `kokoro:${id}`;
+    if (playingVoiceId === key && !player.paused) {
+      player.pause();
+      setPlayingVoiceId(null);
+      return;
+    }
+    setMessage("");
+    const needsFetch = !speakerPreviewUrls.current[key];
+    if (needsFetch) setPreviewingSpeaker(id);
+    try {
+      if (needsFetch) {
+        speakerPreviewUrls.current[key] = await fetchKokoroPreview(id);
+      }
+      player.src = speakerPreviewUrls.current[key];
+      await player.play();
+      setPlayingVoiceId(key);
+    } catch (error) {
+      setPlayingVoiceId(null);
+      setMessage(error instanceof Error ? error.message : "无法试听 Kokoro 音色");
+    } finally {
+      if (needsFetch) setPreviewingSpeaker(null);
     }
   }
 
@@ -1153,6 +1233,8 @@ export default function App() {
       ? health?.asr_model_id?.split("/").pop() || "Qwen3-ASR"
       : route === "translate"
         ? health?.instruct_model_id?.split("/").pop() || "Qwen3-1.7B"
+        : dubEngine === "kokoro"
+          ? health?.kokoro_model_id?.split("/").pop() || "Kokoro-82M"
         : (
             health?.current_mode === "design"
               ? health?.design_model_id
@@ -1171,6 +1253,12 @@ export default function App() {
         ? `${health?.asr_model_ready ? "转写就绪" : "转写未下载"} · ${
             health?.instruct_loaded ? "翻译已加载" : health?.instruct_model_ready ? "翻译就绪" : "翻译未下载"
           }`
+        : dubEngine === "kokoro"
+          ? health?.kokoro_loaded
+            ? "Kokoro 已加载"
+            : health?.kokoro_model_ready
+              ? "Kokoro 就绪"
+              : "Kokoro 未下载"
         : `${health?.model_loaded ? "已加载" : "未加载"}${health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}${health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}`;
 
   if (route === "captions") {
@@ -1360,8 +1448,26 @@ export default function App() {
             </div>
           ) : (
             <>
+          <div className="mode-switch engine-switch">
+            <button
+              type="button"
+              className={dubEngine === "qwen" ? "active" : ""}
+              onClick={() => pickEngine("qwen")}
+            >
+              Qwen3
+            </button>
+            <button
+              type="button"
+              className={dubEngine === "kokoro" ? "active" : ""}
+              onClick={() => pickEngine("kokoro")}
+            >
+              Kokoro
+            </button>
+          </div>
           <p className="hint">
-            预设、描述和克隆可以同时选。同一文稿会为每个已选音色各生成一段短音频。
+            {dubEngine === "kokoro"
+              ? "轻量英文旁白，固定音色，不能克隆或描述。生成时会卸掉 Qwen TTS。"
+              : "预设、描述和克隆可以同时选。同一文稿会为每个已选音色各生成一段短音频。"}
           </p>
           <div className="roster">
             <div className="roster-head">
@@ -1383,7 +1489,7 @@ export default function App() {
                     <span aria-hidden="true">×</span>
                   </button>
                 ))}
-                {pendingClone ? (
+                {pendingClone && dubEngine !== "kokoro" ? (
                   <span className="roster-chip pending">
                     <small>克隆</small>
                     未保存参考音频
@@ -1391,11 +1497,59 @@ export default function App() {
                 ) : null}
               </div>
             ) : (
-              <p className="hint">还没有选音色。从下面三类里点选，描述音色点「加入已选」。</p>
+              <p className="hint">
+                {dubEngine === "kokoro"
+                  ? "还没有选音色。从下面点选 Kokoro 英文音色。"
+                  : "还没有选音色。从下面三类里点选，描述音色点「加入已选」。"}
+              </p>
             )}
           </div>
           <p className="hint">温度在文稿栏调节，所有已选音色共用。稳定配音另外管句号和时长。</p>
 
+          {dubEngine === "kokoro" ? (
+          <FoldSection
+            title="Kokoro 英文音色"
+            badge={`${selectedKokoro.length}`}
+            open
+            onToggle={() => undefined}
+          >
+            <p className="hint">
+              可多选。英文旁白，Apache 2.0 可商用。点「试听」听一句。
+              {health?.kokoro_model_ready ? "" : " 当前还没下载 Kokoro 权重，请先运行 `make download-kokoro`。"}
+            </p>
+            <div className="speaker-grid">
+              {kokoroVoices.map((item) => (
+                <div key={item.id} className={selectedKokoro.includes(item.id) ? "speaker-card on" : "speaker-card"}>
+                  <button
+                    type="button"
+                    className={selectedKokoro.includes(item.id) ? "speaker on" : "speaker"}
+                    aria-pressed={selectedKokoro.includes(item.id)}
+                    onClick={() => toggleKokoro(item.id)}
+                  >
+                    {item.label}
+                    <small>
+                      {item.native}
+                      {item.description ? ` · ${item.description}` : ""}
+                    </small>
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost mini"
+                    disabled={health?.kokoro_model_ready === false || previewingSpeaker !== null}
+                    onClick={() => void togglePlayKokoro(item.id)}
+                  >
+                    {previewingSpeaker === item.id
+                      ? "生成中…"
+                      : playingVoiceId === `kokoro:${item.id}`
+                        ? "暂停"
+                        : "试听"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </FoldSection>
+          ) : (
+          <>
           <FoldSection
             title="预设说话人"
             badge={`${selectedSpeakers.length}`}
@@ -1541,6 +1695,8 @@ export default function App() {
               录制新音色
             </button>
           </FoldSection>
+          </>
+          )}
             </>
           )}
         </div>
@@ -1569,7 +1725,11 @@ export default function App() {
             <div className="script-controls">
               <label>
                 语言
-                <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+                <select
+                  value={language}
+                  disabled={dubEngine === "kokoro"}
+                  onChange={(e) => setLanguage(e.target.value)}
+                >
                   {languages.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.label}
@@ -1606,6 +1766,7 @@ export default function App() {
                   <input type="checkbox" checked={stableDub} onChange={(e) => setStableDub(e.target.checked)} />
                   稳定配音
                 </label>
+                {dubEngine === "kokoro" ? null : (
                 <label className="check" title={health?.asr_model_ready ? "配完用转写听一遍，对不上的句子再配一次" : "需要先下载 ASR"}>
                   <input
                     type="checkbox"
@@ -1615,6 +1776,7 @@ export default function App() {
                   />
                   ASR 校对一轮
                 </label>
+                )}
               </div>
               <TempSlider value={temperature} onChange={setTemperature} />
             </div>
@@ -1698,9 +1860,10 @@ export default function App() {
                   busy ||
                   filledSegments.length === 0 ||
                   voiceCount === 0 ||
-                  (selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
-                  (designs.length > 0 && health?.design_model_ready === false) ||
-                  ((selectedVoiceIds.length > 0 || pendingClone) && health?.model_dir_ready === false)
+                  (dubEngine === "kokoro" && health?.kokoro_model_ready === false) ||
+                  (dubEngine !== "kokoro" && selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
+                  (dubEngine !== "kokoro" && designs.length > 0 && health?.design_model_ready === false) ||
+                  (dubEngine !== "kokoro" && (selectedVoiceIds.length > 0 || pendingClone) && health?.model_dir_ready === false)
                 }
               >
                 {busy

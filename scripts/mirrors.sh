@@ -8,6 +8,7 @@ export UV_EXTRA_INDEX_URL="${UV_EXTRA_INDEX_URL:-https://pypi.org/simple}"
 export NPM_CONFIG_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export HF_MIRROR="${HF_MIRROR:-https://hf-mirror.com}"
+export MODELSCOPE_ENDPOINT="${MODELSCOPE_ENDPOINT:-https://www.modelscope.cn}"
 
 require_apple_silicon() {
   if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
