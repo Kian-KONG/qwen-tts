@@ -41,6 +41,7 @@ import {
 import { FileField } from "./components/FileField";
 import { BlendSliders } from "./components/BlendSliders";
 import { TempSlider } from "./components/TempSlider";
+import { ThemeAudio } from "./components/ThemeAudio";
 import { TranscribePanel } from "./components/TranscribePanel";
 import { LiveCaptionsPage } from "./components/LiveCaptionsPage";
 import { LiveTranslatePanel } from "./components/LiveTranslatePanel";
@@ -54,12 +55,8 @@ import { SpeakerCard } from "./components/SpeakerCard";
 import { FoldSection } from "./components/FoldSection";
 import { blendWeightsQuery, kokoroWeight, normalizedBlendPercents, pruneKokoroWeights, sameKokoroGender } from "./lib/kokoroBlend";
 import { jobNeedsZip, jobVoiceTracks, jobZipName, jobZipUrl, wavName } from "./lib/jobUtils";
-import { isDefaultClonePrompt, languageLabel, t, useI18n } from "./i18n";
+import { displayJobTitle, displayScriptName, isDefaultClonePrompt, isDefaultScript, languageLabel, t, useI18n } from "./i18n";
 import { useHashRoute } from "./route";
-
-const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
-2. We shipped faster voice cloning for internal videos, running entirely on a Mac mini.
-3. The narration should sound natural, steady, and easy to cut against picture.`;
 
 const REC_MAX_SEC = 10;
 
@@ -146,7 +143,6 @@ const JOB_ID_KEY = "qwen-tts-job-id";
 const SIDEBAR_KEY = "qwen-tts-sidebar";
 const THEME_KEY = "qwen-tts-theme";
 const VOICE_FOLD_KEY = "qwen-tts-voice-fold";
-const HISTORY_FOLD_KEY = "qwen-tts-history-fold";
 const PREVIEW_FOLD_KEY = "qwen-tts-preview-fold";
 const VOICES_COLLAPSE_KEY = "qwen-tts-voices-collapsed";
 const ENGINE_KEY = "qwen-tts-engine";
@@ -277,7 +273,6 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [voiceFold, setVoiceFold] = useState<VoiceFold>(storedVoiceFold);
   const [cloneStudioOpen, setCloneStudioOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(() => stored(HISTORY_FOLD_KEY, "1") !== "0");
   const [previewOpen, setPreviewOpen] = useState(() => stored(PREVIEW_FOLD_KEY, "0") === "1");
   const [voicesCollapsed, setVoicesCollapsed] = useState(() => stored(VOICES_COLLAPSE_KEY, "0") === "1");
   const [health, setHealth] = useState<Health | null>(null);
@@ -353,7 +348,7 @@ export default function App() {
   const [previewingSpeaker, setPreviewingSpeaker] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  const [markdown, setMarkdown] = useState(SAMPLE_MARKDOWN);
+  const [markdown, setMarkdown] = useState(() => t("script.sample"));
   const [batchSize, setBatchSize] = useState(4);
   const [job, setJob] = useState<Job | null>(null);
   const [history, setHistory] = useState<Job[]>([]);
@@ -484,6 +479,10 @@ export default function App() {
   }, [clonePrompt]);
 
   useEffect(() => {
+    setMarkdown((current) => (isDefaultScript(current) ? t("script.sample") : current));
+  }, [locale]);
+
+  useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => void refresh(), 15000);
     return () => window.clearInterval(timer);
@@ -512,13 +511,12 @@ export default function App() {
       window.localStorage.setItem(KOKORO_BLEND_KEY, kokoroBlend ? "1" : "0");
       window.localStorage.setItem(KOKORO_BLEND_WEIGHTS_KEY, JSON.stringify(kokoroWeights));
       window.localStorage.setItem(VOICE_FOLD_KEY, voiceFold);
-      window.localStorage.setItem(HISTORY_FOLD_KEY, historyOpen ? "1" : "0");
       window.localStorage.setItem(PREVIEW_FOLD_KEY, previewOpen ? "1" : "0");
       window.localStorage.setItem(VOICES_COLLAPSE_KEY, voicesCollapsed ? "1" : "0");
     } catch {
       /* ignore quota / private mode */
     }
-  }, [voiceId, selectedSpeakers, selectedKokoro, selectedVoiceIds, designs, railCollapsed, theme, voiceFold, historyOpen, previewOpen, voicesCollapsed, dubEngine, kokoroBlend, kokoroWeights]);
+  }, [voiceId, selectedSpeakers, selectedKokoro, selectedVoiceIds, designs, railCollapsed, theme, voiceFold, previewOpen, voicesCollapsed, dubEngine, kokoroBlend, kokoroWeights]);
 
   useEffect(() => {
     setKokoroWeights((current) => {
@@ -672,7 +670,7 @@ export default function App() {
       setScripts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setActiveScriptId(saved.id);
       setScriptName(saved.name);
-      setMessage(t("msg.savedList", { name: saved.name, n: saved.chunks ?? filledSegments.length }));
+      setMessage(t("msg.savedList", { name: displayScriptName(saved.name), n: saved.chunks ?? filledSegments.length }));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t("msg.saveFail"));
     } finally {
@@ -695,7 +693,7 @@ export default function App() {
       });
       setScripts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setScriptName(saved.name);
-      setMessage(t("msg.updatedList", { name: saved.name, n: saved.chunks ?? filledSegments.length }));
+      setMessage(t("msg.updatedList", { name: displayScriptName(saved.name), n: saved.chunks ?? filledSegments.length }));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t("msg.updateFail"));
     } finally {
@@ -711,7 +709,7 @@ export default function App() {
       const item = await getScript(id);
       applyScript(item);
       setScripts((current) => current.map((row) => (row.id === item.id ? { ...row, ...item } : row)));
-      setMessage(t("msg.loadedList", { name: item.name, n: parseMarkdownList(item.markdown || "").length }));
+      setMessage(t("msg.loadedList", { name: displayScriptName(item.name), n: parseMarkdownList(item.markdown || "").length }));
     } catch (error) {
       if (!cached?.markdown) setMessage(error instanceof Error ? error.message : t("msg.loadFail"));
     } finally {
@@ -725,7 +723,7 @@ export default function App() {
       const saved = await updateScript(id, { name });
       setScripts((current) => current.map((item) => (item.id === id ? { ...item, ...saved } : item)));
       if (activeScriptId === id) setScriptName(saved.name);
-      setMessage(t("msg.renamed", { name: saved.name }));
+      setMessage(t("msg.renamed", { name: displayScriptName(saved.name) }));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t("msg.renameFail"));
     } finally {
@@ -734,13 +732,13 @@ export default function App() {
   }
 
   async function onDeleteScript(id: string, name: string) {
-    if (!window.confirm(t("msg.confirmDeleteList", { name }))) return;
+    if (!window.confirm(t("msg.confirmDeleteList", { name: displayScriptName(name) }))) return;
     setScriptPending({ action: "delete", id });
     try {
       await deleteScript(id);
       setScripts((current) => current.filter((item) => item.id !== id));
       if (activeScriptId === id) setActiveScriptId("");
-      setMessage(t("msg.deleted", { name }));
+      setMessage(t("msg.deleted", { name: displayScriptName(name) }));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t("msg.deleteFail"));
     } finally {
@@ -1292,7 +1290,12 @@ export default function App() {
     if (!value) return "";
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "";
-    return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return date.toLocaleString(locale === "en" ? "en-US" : "zh-CN", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 
   function historyHint(item: Job) {
@@ -1312,6 +1315,32 @@ export default function App() {
     ]
       .filter(Boolean)
       .join(" · ");
+  }
+
+  function takeHeadline(item: Job) {
+    if (item.status === "done") {
+      const n = item.chunks || item.segments?.length || 0;
+      const extra = verifySummary(item) ? ` · ${verifySummary(item)}` : "";
+      const line =
+        item.speakers && item.speakers.length > 1
+          ? t("output.doneLineVoices", {
+              n,
+              voices: item.speakers.length,
+              audio: item.audio_sec ?? "-",
+              elapsed: item.elapsed_sec ?? "-",
+              rtf: item.rtf ?? "-",
+            })
+          : t("output.doneLine", {
+              n,
+              audio: item.audio_sec ?? "-",
+              elapsed: item.elapsed_sec ?? "-",
+              rtf: item.rtf ?? "-",
+            });
+      return `${line}${extra}`;
+    }
+    if (item.status === "error") return item.error || t("status.error");
+    if (item.status === "cancelled") return t("status.cancelled");
+    return `${jobPhaseLabel(item)} · ${Math.round((item.progress || 0) * 100)}%`;
   }
 
   function toggleTheme() {
@@ -1532,7 +1561,7 @@ export default function App() {
                     </button>
                   ) : null}
                 </div>
-                {recUrl ? <audio className="rec-player" controls src={recUrl} /> : null}
+                {recUrl ? <ThemeAudio className="rec-player" src={recUrl} /> : null}
                 <FileField
                   label={t("voices.uploadLabel")}
                   accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
@@ -1941,7 +1970,7 @@ export default function App() {
                 disabled={scriptPending?.action === "load" && activeScriptId !== scriptPending.id}
                 onChange={(e) => setMarkdown(e.target.value)}
                 onKeyDown={onMarkdownKeyDown}
-                placeholder={"1. First line.\n2. Second line."}
+                placeholder={t("script.placeholder")}
               />
               {scriptPending?.action === "load" && activeScriptId !== scriptPending.id ? (
                 <div className="markdown-loading" aria-live="polite">
@@ -2028,47 +2057,43 @@ export default function App() {
         </section>
 
       <section className="panel studio-output">
-        <header className="panel-head">
+        <header
+          className="panel-head takes-head"
+          title={API_BASE ? t("output.hintMac") : t("output.hintTracks")}
+        >
           <h2>{t("output.title")}</h2>
+          <span>{history.length ? String(history.length) : t("output.emptyShort")}</span>
         </header>
-        <p className="hint">
-          {API_BASE
-            ? t("output.hintMac")
-            : t("output.hintTracks")}
-        </p>
-        {history.length ? (
-          <FoldSection
-            title={t("output.history")}
-            badge={`${history.length}${job?.title ? ` · ${job.title}` : job?.id ? ` · ${job.id}` : ""}`}
-            open={historyOpen}
-            onToggle={() => setHistoryOpen((current) => !current)}
-            className="history-fold"
-          >
+        <div className="takes-body">
+          <div className="takes-list">
+            {history.length || job ? (
             <div className="history-list clips">
-              {history.map((item) => {
-                const tracks = jobVoiceTracks(item);
-                const multi = item.status === "done" && tracks.length > 1;
+              {(job && !history.some((item) => item.id === job.id) ? [job, ...history] : history).map((item) => {
+                const live = job?.id === item.id ? job : item;
+                const selected = job?.id === live.id;
+                const tracks = jobVoiceTracks(live);
+                const multi = live.status === "done" && tracks.length > 1;
                 return (
-                <div key={item.id} className={job?.id === item.id ? "media-card on" : "media-card"}>
+                <div key={live.id} className={selected ? "media-card on" : "media-card"}>
                   <AudioRow
-                    label={item.title || item.id}
-                    title={historyHint(item)}
-                    src={item.status === "done" && !multi ? item.download_url || tracks[0]?.url : undefined}
-                    onLabelClick={() => void openHistory(item.id)}
+                    label={displayJobTitle(live)}
+                    title={historyHint(live)}
+                    src={live.status === "done" && !multi ? live.download_url || tracks[0]?.url : undefined}
+                    onLabelClick={() => void openHistory(live.id)}
                     actions={
-                      jobActive(item.status) ? (
+                      jobActive(live.status) ? (
                         <button
                           type="button"
                           className="ghost mini stop"
-                          disabled={item.status === "cancelling"}
-                          onClick={() => void onCancelJob(item.id)}
+                          disabled={live.status === "cancelling"}
+                          onClick={() => void onCancelJob(live.id)}
                         >
-                          {item.status === "cancelling" ? t("status.halting") : t("output.stop")}
+                          {live.status === "cancelling" ? t("status.halting") : t("output.stop")}
                         </button>
-                      ) : item.status === "done" ? (
+                      ) : live.status === "done" ? (
                         <>
-                          {jobNeedsZip(item) ? (
-                            <button type="button" className="ghost mini" onClick={() => void onDownloadZip(item)}>
+                          {jobNeedsZip(live) ? (
+                            <button type="button" className="ghost mini" onClick={() => void onDownloadZip(live)}>
                               {t("output.zip")}
                             </button>
                           ) : !multi ? (
@@ -2077,89 +2102,56 @@ export default function App() {
                               className="ghost mini"
                               onClick={() =>
                                 void onDownload(
-                                  withDownload(tracks[0]?.url || item.download_url || ""),
-                                  wavName(tracks[0]?.filename || item.download_name || item.title || item.id),
+                                  withDownload(tracks[0]?.url || live.download_url || ""),
+                                  wavName(tracks[0]?.filename || live.download_name || live.title || live.id),
                                 )
                               }
                             >
                               {t("common.download")}
                             </button>
                           ) : null}
-                          <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
+                          <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(live.id)}>
                             {t("common.delete")}
                           </button>
                         </>
                       ) : null
                     }
                   />
-                  {multi ? <TrackList job={item} tracks={tracks} onDownload={onDownload} /> : null}
+                  {selected ? (
+                    <div className="take-detail">
+                      <div className="bar">
+                        <span style={{ width: `${Math.round((live.progress || 0) * 100)}%` }} />
+                      </div>
+                      <p>{takeHeadline(live)}</p>
+                      {live.status === "done" && live.local_dir && !API_BASE ? (
+                        <p className="hint">{t("output.localHint", { dir: live.local_dir })}</p>
+                      ) : null}
+                      {live.status === "done" && tracks.length ? (
+                        <TrackList job={live} tracks={tracks} onDownload={onDownload} />
+                      ) : null}
+                      {live.status === "done" && jobNeedsZip(live) ? (
+                        <div className="tracks">
+                          <button type="button" className="ghost" onClick={() => void onDownloadZip(live)}>
+                            {t("output.zipAll")}
+                          </button>
+                        </div>
+                      ) : null}
+                      {live.status === "done" && live.segments?.length ? (
+                        <ClipList segments={live.segments} onDownload={onDownload} />
+                      ) : null}
+                    </div>
+                  ) : multi ? (
+                    <TrackList job={live} tracks={tracks} onDownload={onDownload} />
+                  ) : null}
                 </div>
                 );
               })}
             </div>
-          </FoldSection>
-        ) : (
-          <p className="hint">{t("output.empty")}</p>
-        )}
-        {job ? (
-          <div className="job">
-            <div className="bar">
-              <span style={{ width: `${Math.round((job.progress || 0) * 100)}%` }} />
-            </div>
-            <p>
-              {job.status === "done"
-                ? `${
-                    job.speakers && job.speakers.length > 1
-                      ? t("output.doneLineVoices", {
-                          n: job.chunks || job.segments?.length || 0,
-                          voices: job.speakers.length,
-                          audio: job.audio_sec ?? "-",
-                          elapsed: job.elapsed_sec ?? "-",
-                          rtf: job.rtf ?? "-",
-                        })
-                      : t("output.doneLine", {
-                          n: job.chunks || job.segments?.length || 0,
-                          audio: job.audio_sec ?? "-",
-                          elapsed: job.elapsed_sec ?? "-",
-                          rtf: job.rtf ?? "-",
-                        })
-                  }${verifySummary(job) ? ` · ${verifySummary(job)}` : ""}`
-                : job.status === "error"
-                  ? job.error
-                  : job.status === "cancelled"
-                    ? t("status.cancelled")
-                    : `${jobPhaseLabel(job)} · ${Math.round((job.progress || 0) * 100)}%`}
-            </p>
-            {jobActive(job.status) ? (
-              <button
-                type="button"
-                className="ghost stop"
-                disabled={job.status === "cancelling"}
-                onClick={() => void onCancelJob(job.id)}
-              >
-                {job.status === "cancelling" ? t("common.stopping") : t("output.stop")}
-              </button>
-            ) : null}
-            {job.status === "done" && job.local_dir && !API_BASE ? (
-              <p className="hint">{t("output.localHint", { dir: job.local_dir })}</p>
-            ) : null}
-            {job.status === "done" && jobVoiceTracks(job).length ? (
-              <TrackList job={job} tracks={jobVoiceTracks(job)} onDownload={onDownload} />
-            ) : null}
-            {job.status === "done" && jobNeedsZip(job) ? (
-              <div className="tracks">
-                <button type="button" className="ghost" onClick={() => void onDownloadZip(job)}>
-                  {t("output.zipAll")}
-                </button>
-              </div>
-            ) : null}
-            {job.status === "done" && job.segments?.length ? (
-              <ClipList segments={job.segments} onDownload={onDownload} />
-            ) : null}
+            ) : (
+              <p className="takes-empty">{t("output.empty")}</p>
+            )}
           </div>
-        ) : history.length ? null : (
-          <p className="hint">{t("output.placeholder")}</p>
-        )}
+        </div>
       </section>
       </div>
       )}

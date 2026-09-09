@@ -10,7 +10,7 @@ export NPM_CONFIG_REGISTRY ?= https://registry.npmmirror.com
 export HF_ENDPOINT ?= https://hf-mirror.com
 export HF_MIRROR ?= https://hf-mirror.com
 
-.PHONY: help setup download download-design download-custom download-asr download-instruct download-kokoro start dev tunnel tunnel-named tunnel-setup health
+.PHONY: help setup download download-design download-custom download-asr download-instruct download-kokoro start dev tunnel tunnel-named tunnel-quick tunnel-setup health
 
 help:
 	@echo "Apple Silicon / MLX targets:"
@@ -25,8 +25,9 @@ help:
 	@echo "  make dev           Backend + Vite hot reload"
 	@echo "  make health        GET /health"
 	@echo "  make tunnel-setup  Optional: install cloudflared"
-	@echo "  make tunnel-named  Stable Cloudflare named tunnel (needs login)"
-	@echo "  make tunnel        Optional: temporary trycloudflare URL"
+	@echo "  make tunnel        Named tunnel if a token exists, else trycloudflare"
+	@echo "  make tunnel-named  Force the named tunnel (tts.efforttracking.online)"
+	@echo "  make tunnel-quick Temporary trycloudflare URL (changes every run)"
 
 setup:
 	./scripts/setup.sh
@@ -66,3 +67,6 @@ tunnel:
 
 tunnel-named:
 	./scripts/tunnel-named.sh
+
+tunnel-quick:
+	./scripts/tunnel-quick.sh

@@ -1,6 +1,5 @@
 :root,
 html[data-theme="dark"] {
-  color-scheme: dark;
   --bg: #0b0c0b;
   --panel: #141512;
   --sidebar: #0e0f0d;
@@ -30,8 +29,12 @@ html[data-theme="dark"] {
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%239a9a8c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1.5 1.8 L6 6.2 L10.5 1.8'/%3E%3C/svg%3E");
 }
 
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 html[data-theme="light"] {
-  color-scheme: light;
+  color-scheme: light only;
   --bg: #ece7db;
   --panel: #fbf8f1;
   --sidebar: #f3f0e6;
@@ -373,6 +376,7 @@ html {
 .studio {
   --voices-col: 360px;
   grid-template-columns: var(--voices-col) minmax(0, 1fr) auto;
+  align-items: stretch;
 }
 
 .studio.voices-collapsed {
@@ -554,11 +558,49 @@ html {
   font-size: 12px;
 }
 
-.studio-output {
+.panel.studio-output {
   width: min(34vw, 560px);
   min-width: 280px;
+  min-height: 0;
+  align-self: stretch;
   overflow: hidden;
-  contain: layout paint;
+}
+
+.studio-output .takes-head {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.studio-output .takes-head span {
+  max-width: none;
+}
+
+.takes-body,
+.takes-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.takes-list {
+  overflow: auto;
+}
+
+.takes-empty {
+  display: grid;
+  place-items: center;
+  flex: 1;
+  margin: 0;
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.take-detail {
+  display: grid;
+  gap: 8px;
+  padding: 6px 2px 4px;
 }
 
 .studio-script {
@@ -692,34 +734,9 @@ button.ghost.stop {
   border: 1px solid var(--danger);
 }
 
-.studio-output .history-fold {
-  flex: 0 0 auto;
-  border-top: 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.studio-output .history-fold.on {
-  max-height: 38%;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.studio-output .history-fold .fold-body {
-  min-height: 0;
-  overflow: auto;
-  padding-bottom: 10px;
-}
-
-.studio-output .history-list {
+.studio-output .takes-list .history-list {
   min-height: 0;
   margin: 0;
-}
-
-.studio-output .job {
-  flex: 1 1 0;
-  min-height: 140px;
-  overflow: auto;
 }
 
 .asr-side,
@@ -1774,9 +1791,50 @@ button .spin,
   max-height: 32px;
 }
 
-.clip-voice audio::-webkit-media-controls-enclosure,
-.clip-voice audio::-webkit-media-controls-panel {
-  max-height: 32px;
+.theme-audio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 80px;
+  height: 32px;
+  padding: 0 8px 0 2px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.theme-audio audio {
+  display: none;
+}
+
+.theme-audio-play {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+}
+
+.theme-audio-play svg {
+  width: 14px;
+  height: 14px;
+}
+
+.theme-audio input[type="range"] {
+  flex: 1;
+  min-width: 40px;
+  height: 4px;
+  accent-color: var(--accent);
+}
+
+.theme-audio span {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .button.ghost {
@@ -1813,12 +1871,6 @@ button .spin,
   gap: 12px;
   align-items: center;
   margin-top: 12px;
-}
-
-audio {
-  flex: 1;
-  min-width: 160px;
-  width: 100%;
 }
 
 .flash {
@@ -1858,13 +1910,14 @@ audio {
 @media (max-width: 1280px) {
   .studio {
     grid-template-columns: var(--voices-col) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 42%);
   }
 
-  .studio-output {
+  .panel.studio-output {
     grid-column: 1 / -1;
     width: auto;
     min-width: 0;
-    max-height: 46vh;
+    height: auto;
   }
 }
 
@@ -1947,6 +2000,7 @@ audio {
   .script-controls {
     display: grid;
     grid-template-columns: 1fr;
+    grid-template-rows: none;
   }
 
   .studio.voices-collapsed .studio-voices {
@@ -1986,12 +2040,13 @@ audio {
     padding-bottom: 0;
   }
 
-  .studio-output {
+  .panel.studio-output {
     grid-column: auto;
     width: auto;
     min-width: 0;
     max-height: none;
     min-height: 50vh;
+    height: auto;
   }
 
   .status {

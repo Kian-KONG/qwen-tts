@@ -99,6 +99,66 @@ export function isDefaultClonePrompt(text: string): boolean {
   return text === zh.msg.clonePrompt || text === en.msg.clonePrompt || !text.trim();
 }
 
+export function isDefaultScript(text: string): boolean {
+  return text === zh.script.sample || text === en.script.sample;
+}
+
+const DOOR_LOCK_RE =
+  /^(?:门锁|door[\s-]*lock)\s*(\d+)?\s*(中文|英文|英语|chinese|english|japanese|korean|日语|日文|韩语|韩文)?$/i;
+
+const LANG_TOKEN_TO_ID: Record<string, string> = {
+  中文: "Chinese",
+  英文: "English",
+  英语: "English",
+  chinese: "Chinese",
+  english: "English",
+  japanese: "Japanese",
+  korean: "Korean",
+  日语: "Japanese",
+  日文: "Japanese",
+  韩语: "Korean",
+  韩文: "Korean",
+};
+
+function langIdFromToken(token?: string): string {
+  if (!token) return "";
+  return LANG_TOKEN_TO_ID[token] || LANG_TOKEN_TO_ID[token.toLowerCase()] || "";
+}
+
+export function displayScriptName(name?: string): string {
+  const raw = (name || "").trim();
+  if (!raw) return "";
+  if (raw === zh.script.fallbackName || raw === en.script.fallbackName) {
+    return t("script.fallbackName");
+  }
+  const match = raw.match(DOOR_LOCK_RE);
+  if (!match) return raw;
+  const n = match[1];
+  const langId = langIdFromToken(match[2]);
+  const langText = langId ? languageLabel(langId) : "";
+  if (n && langText) return t("lists.doorLockLang", { n, lang: langText });
+  if (n) return t("lists.doorLockN", { n });
+  if (langText) return t("lists.doorLockLangOnly", { lang: langText });
+  return t("lists.doorLock");
+}
+
+export function displayJobTitle(job: {
+  title?: string;
+  script_name?: string | null;
+  id?: string;
+}): string {
+  const stored = (job.script_name || "").trim();
+  const title = (job.title || job.id || "").trim();
+  if (stored && title.startsWith(stored)) {
+    return displayScriptName(stored) + title.slice(stored.length);
+  }
+  if (!title) return displayScriptName(stored);
+  const sep = " · ";
+  const index = title.indexOf(sep);
+  if (index === -1) return displayScriptName(title);
+  return displayScriptName(title.slice(0, index)) + title.slice(index);
+}
+
 type I18nValue = {
   locale: Locale;
   t: typeof t;

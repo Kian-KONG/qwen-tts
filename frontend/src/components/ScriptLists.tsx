@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import type { ScriptList } from "../api";
-import { languageLabel, useI18n } from "../i18n";
+import { displayScriptName, languageLabel, useI18n } from "../i18n";
 import { FoldSection } from "./FoldSection";
 
 export type ScriptPending = {
@@ -63,7 +63,7 @@ export function ScriptLists({
   return (
     <FoldSection
       title={t("lists.title")}
-      badge={`${scripts.length}${active ? ` · ${active.name}` : ""}`}
+      badge={`${scripts.length}${active ? ` · ${displayScriptName(active.name)}` : ""}`}
       open={open}
       onToggle={() => setOpen((current) => !current)}
     >
@@ -112,7 +112,7 @@ export function ScriptLists({
             return (
               <div key={item.id} className={item.id === activeId ? "voice-card on" : "voice-card"}>
                 <button type="button" className="voice-select" disabled={busy} onClick={() => onLoad(item.id)}>
-                  <strong>{item.name}</strong>
+                  <strong>{displayScriptName(item.name)}</strong>
                   <small>
                     {t("common.segments", { n: count })}
                     {item.language ? ` · ${scriptLanguage(item.language)}` : ""}

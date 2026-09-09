@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ThemeAudio } from "./ThemeAudio";
 
 export function AudioRow({
   label,
@@ -23,7 +24,7 @@ export function AudioRow({
       ) : (
         name
       )}
-      {src ? <audio controls preload="none" src={src} /> : null}
+      {src ? <ThemeAudio src={src} /> : null}
       {actions}
     </div>
   );

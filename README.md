@@ -49,8 +49,9 @@ make start
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |
 | `make tunnel-setup` | 可选：安装 cloudflared |
-| `make tunnel-named` | 固定 Cloudflare 命名隧道（需登录） |
-| `make tunnel` | 可选：临时 trycloudflare 链接 |
+| `make tunnel` | 有 token 时拉固定隧道，否则临时 trycloudflare |
+| `make tunnel-named` | 强制固定隧道 `tts.efforttracking.online` |
+| `make tunnel-quick` | 临时 trycloudflare 链接（每次都会变） |
 
 ## GitHub Pages + 命名隧道
 
@@ -59,14 +60,14 @@ GitHub Pages 只托管静态页面，推理仍在这台 Mac。页面地址：
 https://kian-kong.github.io/qwen-tts/
 
 1. 浏览器登录一次：`cloudflared tunnel login`
-2. 本机先 `make start`，另开终端 `make tunnel-named`
+2. 本机先 `make start`，另开终端 `make tunnel`（本机已有 token 时就是固定域名）
 3. 把 Cloudflare 公网地址写进仓库 **Settings → Secrets and variables → Actions → Variables**，变量名 `VITE_API_BASE`（不要末尾斜杠）。当前默认是 `https://tts.efforttracking.online`
 4. 若本机设了 `QWEN_TTS_API_KEY`，再加 Actions Secret `VITE_API_KEY`，值相同
 5. 等 **Actions → Deploy GitHub Pages** 跑绿，会写出 `gh-pages` 分支
 6. 仓库 **Settings → Pages → Build and deployment → Source** 选 **Deploy from a branch**，Branch 选 `gh-pages` / `/ (root)`，保存
 7. 打开 https://kian-kong.github.io/qwen-tts/
 
-Mac 要保持 FastAPI 和命名隧道都在跑。重启电脑后重新 `make start` 和 `make tunnel-named`。临时 quick tunnel 仍可用 `make tunnel`，但地址会变。
+Mac 要保持 FastAPI 和命名隧道都在跑。重启电脑后重新 `make start` 和 `make tunnel`。只有临时链接才用 `make tunnel-quick`。
 
 如果 `*.cfargotunnel.com` 打不开，到 Cloudflare Zero Trust 给这条隧道加 Public Hostname，或：
 
