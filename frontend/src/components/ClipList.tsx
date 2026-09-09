@@ -1,13 +1,14 @@
 import { withDownload, type JobSegment } from "../api";
+import { useI18n } from "../i18n";
 import { clipLabel, groupSegments, wavName } from "../lib/jobUtils";
 import { AudioRow } from "./AudioRow";
 
-function clipFlag(segment: JobSegment) {
+function clipFlag(segment: JobSegment, t: (path: string) => string) {
   if (segment.retaken) {
-    return { className: "clip-flag ok", label: "已重配", title: segment.asr_text || "校对未对齐，已重配" };
+    return { className: "clip-flag ok", label: t("output.flagRetake"), title: segment.asr_text || t("output.flagRetakeTitle") };
   }
   if (segment.match === false) {
-    return { className: "clip-flag warn", label: "未对齐", title: segment.asr_text || "转写为空" };
+    return { className: "clip-flag warn", label: t("output.flagMismatch"), title: segment.asr_text || t("output.asrEmpty") };
   }
   return null;
 }
@@ -19,6 +20,7 @@ export function ClipList({
   segments: JobSegment[];
   onDownload: (url: string, filename: string) => void;
 }) {
+  const { t } = useI18n();
   return (
     <ol className="clips">
       {groupSegments(segments).map((group) => (
@@ -26,7 +28,7 @@ export function ClipList({
           <div className="clip-voices">
             {group.clips.map((segment) => {
               const name = clipLabel(segment);
-              const flag = clipFlag(segment);
+              const flag = clipFlag(segment, t);
               return (
                 <AudioRow
                   key={segment.index}
@@ -45,7 +47,7 @@ export function ClipList({
                         className="ghost mini"
                         onClick={() => void onDownload(withDownload(segment.url), wavName(segment.filename || name))}
                       >
-                        下载
+                        {t("common.download")}
                       </button>
                     </>
                   }

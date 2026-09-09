@@ -50,16 +50,17 @@ import { ClipList } from "./components/ClipList";
 import { TrackList } from "./components/TrackList";
 import { PhonemeEditor } from "./components/PhonemeEditor";
 import { ScriptLists, type ScriptPending } from "./components/ScriptLists";
+import { SpeakerCard } from "./components/SpeakerCard";
 import { FoldSection } from "./components/FoldSection";
 import { blendWeightsQuery, kokoroWeight, normalizedBlendPercents, pruneKokoroWeights, sameKokoroGender } from "./lib/kokoroBlend";
 import { jobNeedsZip, jobVoiceTracks, jobZipName, jobZipUrl, wavName } from "./lib/jobUtils";
+import { isDefaultClonePrompt, languageLabel, t, useI18n } from "./i18n";
 import { useHashRoute } from "./route";
 
 const SAMPLE_MARKDOWN = `1. Welcome to this week's product update.
 2. We shipped faster voice cloning for internal videos, running entirely on a Mac mini.
 3. The narration should sound natural, steady, and easy to cut against picture.`;
 
-const CLONE_PROMPT = "已为您开锁，欢迎回家。门已关闭并反锁，一切正常。";
 const REC_MAX_SEC = 10;
 
 function recorderFormat(): { mime: string; ext: string } {
@@ -77,19 +78,19 @@ const ITEM_MARK = /^\s*(?:\d{1,3}[\.\)、:：]|\(\d{1,3}\)|\（\d{1,3}\）)\s*/;
 
 const VOICE_PRESETS = [
   {
-    label: "沉稳男旁白",
+    id: "calmMale",
     text: "A calm adult male narrator, warm mid pitch, clear studio diction, American English, no accent, professional documentary tone.",
   },
   {
-    label: "年轻女声",
+    id: "youngFemale",
     text: "A cheerful young female voice, bright and energetic, slightly high pitch, natural conversational English.",
   },
   {
-    label: "新闻主播",
+    id: "news",
     text: "A confident news anchor voice, even pacing, authoritative but not harsh, broadcast studio quality.",
   },
   {
-    label: "温柔女旁白",
+    id: "warmFemale",
     text: "A gentle adult female narrator, soft mid pitch, slow and warm, intimate storytelling tone.",
   },
 ];
@@ -153,41 +154,51 @@ const KOKORO_VOICES_KEY = "qwen-tts-kokoro-voices";
 const KOKORO_BLEND_KEY = "qwen-tts-kokoro-blend";
 const KOKORO_BLEND_WEIGHTS_KEY = "qwen-tts-kokoro-blend-weights";
 
-const MODE_LABEL: Record<string, string> = {
-  preset: "预设",
-  design: "描述",
-  clone: "克隆",
-  mixed: "混合",
-  kokoro: "Kokoro",
-};
+function modeLabel(mode?: string) {
+  if (!mode) return "";
+  const keys: Record<string, string> = {
+    preset: "mode.preset",
+    design: "mode.design",
+    clone: "mode.clone",
+    mixed: "mode.mixed",
+    kokoro: "mode.kokoro",
+  };
+  return keys[mode] ? t(keys[mode]) : mode;
+}
 
-const JOB_STATUS: Record<string, string> = {
-  queued: "排队中",
-  running: "生成中",
-  cancelling: "正在终止",
-  cancelled: "已终止",
-  error: "失败",
-};
+function jobStatusLabel(status: string) {
+  const keys: Record<string, string> = {
+    queued: "status.queued",
+    running: "status.running",
+    cancelling: "status.cancelling",
+    cancelled: "status.cancelled",
+    error: "status.error",
+  };
+  return keys[status] ? t(keys[status]) : status;
+}
 
-const JOB_STAGE: Record<string, string> = {
-  tts: "生成中",
-  asr: "ASR 校对中",
-  retake: "校对重配中",
-  done: "完成",
-};
+function jobStageLabel(stage: string) {
+  const keys: Record<string, string> = {
+    tts: "status.tts",
+    asr: "status.asr",
+    retake: "status.retake",
+    done: "status.done",
+  };
+  return keys[stage] ? t(keys[stage]) : t("status.running");
+}
 
 function jobPhaseLabel(job?: { status?: string; stage?: string | null } | null) {
   if (!job?.status) return "";
-  if (job.status === "running") return JOB_STAGE[job.stage || ""] || "生成中";
-  return JOB_STATUS[job.status] || job.status;
+  if (job.status === "running") return jobStageLabel(job.stage || "");
+  return jobStatusLabel(job.status);
 }
 
 function verifySummary(job?: Pick<Job, "verify"> | null) {
   const verify = job?.verify;
   if (!verify?.enabled) return "";
-  if (verify.skipped) return verify.reason ? `校对跳过（${verify.reason}）` : "校对跳过";
-  if (verify.retaken) return `重配 ${verify.retaken} 段`;
-  if (verify.checked) return "校对通过";
+  if (verify.skipped) return verify.reason ? t("status.verifySkipReason", { reason: verify.reason }) : t("status.verifySkip");
+  if (verify.retaken) return t("status.verifyRetake", { n: verify.retaken });
+  if (verify.checked) return t("status.verifyOk");
   return "";
 }
 
@@ -254,6 +265,8 @@ function storedJson<T>(key: string, fallback: T): T {
 }
 
 export default function App() {
+  const { t, locale, setLocale } = useI18n();
+  const clonePrompt = t("msg.clonePrompt");
   const [route, go] = useHashRoute();
   const [railCollapsed, setRailCollapsed] = useState(() => stored(SIDEBAR_KEY, "0") === "1");
   const [theme, setTheme] = useState<ThemeName>(() => {
@@ -294,7 +307,7 @@ export default function App() {
     const one = stored(VOICE_ID_KEY, "");
     return one ? [one] : [];
   });
-  const [voiceName, setVoiceName] = useState("我的音色");
+  const [voiceName, setVoiceName] = useState(() => t("voices.namePlaceholder"));
   const [designs, setDesigns] = useState<DesignPick[]>(() => {
     const raw = storedJson<DesignPick[]>(DESIGNS_KEY, []);
     return Array.isArray(raw) ? raw.filter((item) => item?.instruct && item?.name) : [];
@@ -305,7 +318,7 @@ export default function App() {
   const [verifyAsr, setVerifyAsr] = useState(false);
   const [temperature, setTemperature] = useState(0.3);
   const [refFile, setRefFile] = useState<File | null>(null);
-  const [refText, setRefText] = useState(CLONE_PROMPT);
+  const [refText, setRefText] = useState(() => t("msg.clonePrompt"));
   const [recStatus, setRecStatus] = useState<"idle" | "recording" | "ready">("idle");
   const [recSeconds, setRecSeconds] = useState(0);
   const [recUrl, setRecUrl] = useState("");
@@ -454,7 +467,7 @@ export default function App() {
       void refreshHistory();
     } catch (error) {
       setScriptsReady(true);
-      setMessage(error instanceof Error ? error.message : "无法连接后端");
+      setMessage(error instanceof Error ? error.message : t("msg.backendDown"));
     }
   }
 
@@ -465,6 +478,10 @@ export default function App() {
       /* listing is optional while the API is waking up */
     }
   }
+
+  useEffect(() => {
+    setRefText((current) => (isDefaultClonePrompt(current) ? clonePrompt : current));
+  }, [clonePrompt]);
 
   useEffect(() => {
     void refresh();
@@ -527,10 +544,10 @@ export default function App() {
         if (!jobLost(error)) return;
         setJob((current) =>
           current && current.id === job.id
-            ? { ...current, status: "error", error: "任务已中断（服务重启后丢失），请重新点分段配音" }
+            ? { ...current, status: "error", error: t("msg.jobLostRestart") }
             : current,
         );
-        setMessage("上次生成在服务重启时丢掉了，重新点一次分段配音即可");
+        setMessage(t("msg.jobLostHint"));
         try {
           window.localStorage.removeItem(JOB_ID_KEY);
         } catch {
@@ -561,7 +578,7 @@ export default function App() {
       } catch (error) {
         setAsrJob((current) =>
           current
-            ? { ...current, status: "error", stage: "error", error: error instanceof Error ? error.message : "查询失败" }
+            ? { ...current, status: "error", stage: "error", error: error instanceof Error ? error.message : t("msg.queryFail") }
             : current,
         );
       }
@@ -580,7 +597,7 @@ export default function App() {
           setAsrJob(next);
           if (next.text) setAsrText(next.text);
         } catch {
-          setMessage("找不到转写任务");
+          setMessage(t("msg.asrJobMissing"));
         }
       })();
     }
@@ -597,7 +614,7 @@ export default function App() {
           } catch {
             /* ignore */
           }
-          if (jobLost(error)) setMessage("上次未完成的任务已经不在了，重新点一次分段配音即可");
+          if (jobLost(error)) setMessage(t("msg.jobGone"));
         }
       })();
     }
@@ -628,9 +645,9 @@ export default function App() {
       setMarkdown(result.markdown);
       setExcelName(file.name);
       setActiveScriptId("");
-      setMessage(`已从表格导入 ${result.count} 段，每个单元格一段`);
+      setMessage(t("msg.imported", { n: result.count }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "导入失败");
+      setMessage(error instanceof Error ? error.message : t("msg.importFail"));
     }
   }
 
@@ -646,7 +663,7 @@ export default function App() {
   async function onSaveScript() {
     const name = scriptName.trim();
     if (!name || !markdown.trim()) {
-      setMessage("请填写列表名称和文稿");
+      setMessage(t("msg.needListName"));
       return;
     }
     setScriptPending({ action: "save" });
@@ -655,9 +672,9 @@ export default function App() {
       setScripts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setActiveScriptId(saved.id);
       setScriptName(saved.name);
-      setMessage(`已保存列表「${saved.name}」· ${saved.chunks ?? filledSegments.length} 段`);
+      setMessage(t("msg.savedList", { name: saved.name, n: saved.chunks ?? filledSegments.length }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败");
+      setMessage(error instanceof Error ? error.message : t("msg.saveFail"));
     } finally {
       setScriptPending(null);
     }
@@ -666,7 +683,7 @@ export default function App() {
   async function onUpdateScript() {
     if (!activeScriptId) return;
     if (!markdown.trim()) {
-      setMessage("文稿是空的");
+      setMessage(t("msg.emptyScript"));
       return;
     }
     setScriptPending({ action: "update", id: activeScriptId });
@@ -678,9 +695,9 @@ export default function App() {
       });
       setScripts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setScriptName(saved.name);
-      setMessage(`已更新「${saved.name}」· ${saved.chunks ?? filledSegments.length} 段`);
+      setMessage(t("msg.updatedList", { name: saved.name, n: saved.chunks ?? filledSegments.length }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "更新失败");
+      setMessage(error instanceof Error ? error.message : t("msg.updateFail"));
     } finally {
       setScriptPending(null);
     }
@@ -694,9 +711,9 @@ export default function App() {
       const item = await getScript(id);
       applyScript(item);
       setScripts((current) => current.map((row) => (row.id === item.id ? { ...row, ...item } : row)));
-      setMessage(`已载入「${item.name}」· ${parseMarkdownList(item.markdown || "").length} 段`);
+      setMessage(t("msg.loadedList", { name: item.name, n: parseMarkdownList(item.markdown || "").length }));
     } catch (error) {
-      if (!cached?.markdown) setMessage(error instanceof Error ? error.message : "载入失败");
+      if (!cached?.markdown) setMessage(error instanceof Error ? error.message : t("msg.loadFail"));
     } finally {
       setScriptPending(null);
     }
@@ -708,24 +725,24 @@ export default function App() {
       const saved = await updateScript(id, { name });
       setScripts((current) => current.map((item) => (item.id === id ? { ...item, ...saved } : item)));
       if (activeScriptId === id) setScriptName(saved.name);
-      setMessage(`已重命名为 ${saved.name}`);
+      setMessage(t("msg.renamed", { name: saved.name }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重命名失败");
+      setMessage(error instanceof Error ? error.message : t("msg.renameFail"));
     } finally {
       setScriptPending(null);
     }
   }
 
   async function onDeleteScript(id: string, name: string) {
-    if (!window.confirm(`删除配音列表「${name}」？文稿会从本机去掉。`)) return;
+    if (!window.confirm(t("msg.confirmDeleteList", { name }))) return;
     setScriptPending({ action: "delete", id });
     try {
       await deleteScript(id);
       setScripts((current) => current.filter((item) => item.id !== id));
       if (activeScriptId === id) setActiveScriptId("");
-      setMessage(`已删除 ${name}`);
+      setMessage(t("msg.deleted", { name }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "删除失败");
+      setMessage(error instanceof Error ? error.message : t("msg.deleteFail"));
     } finally {
       setScriptPending(null);
     }
@@ -803,10 +820,10 @@ export default function App() {
 
   async function startMic() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setMessage("当前浏览器不支持麦克风录音，请改用上传文件");
+      setMessage(t("msg.noMic"));
       return;
     }
-    if (!refText.trim()) setRefText(CLONE_PROMPT);
+    if (!refText.trim()) setRefText(clonePrompt);
     setMessage("");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -839,7 +856,7 @@ export default function App() {
           stopMicTracks();
           stopMicTimer();
           setRecStatus("idle");
-          setMessage("没录到声音，请再试一次");
+          setMessage(t("msg.noAudio"));
         }
       };
       recorder.start(200);
@@ -853,18 +870,18 @@ export default function App() {
       }, 100);
     } catch (error) {
       const denied = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "NotFoundError");
-      setMessage(denied ? "请允许使用麦克风后再录，或检查有没有接好话筒" : "无法打开麦克风");
+      setMessage(denied ? t("msg.micDenied") : t("msg.micFail"));
     }
   }
 
   async function onSaveVoice(event: FormEvent) {
     event.preventDefault();
     if (!refFile) {
-      setMessage("请先对着麦克风录音，或上传 3–10 秒参考音频");
+      setMessage(t("msg.needRef"));
       return;
     }
     if (!refText.trim()) {
-      setMessage("请填写朗读稿，需和录音内容一致");
+      setMessage(t("msg.needTranscript"));
       return;
     }
     setBusy(true);
@@ -876,9 +893,9 @@ export default function App() {
       setSelectedVoiceIds((current) => (current.includes(voice.id) ? current : [...current, voice.id]));
       setCloneStudioOpen(false);
       setVoiceFold("clone");
-      setMessage(`已保存音色 ${voice.name}`);
+      setMessage(t("msg.savedVoice", { name: voice.name }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败");
+      setMessage(error instanceof Error ? error.message : t("msg.saveFail"));
     } finally {
       setBusy(false);
     }
@@ -886,11 +903,11 @@ export default function App() {
 
   async function onTranscribe() {
     if (!asrFile) {
-      setMessage("请先选择要识别的音频");
+      setMessage(t("msg.needAsrFile"));
       return;
     }
     if (health?.asr_model_ready === false) {
-      setMessage("还没下载 Qwen3-ASR，请先运行 make download-asr");
+      setMessage(t("msg.needAsrDownload"));
       return;
     }
     setMessage("");
@@ -901,7 +918,7 @@ export default function App() {
       setAsrJob(next.status ? next : { ...next, status: "done", progress: 1, stage: "done" });
       if ((next.status === "done" || !next.status) && next.text) setAsrText(next.text);
     } catch (error) {
-      const detail = error instanceof Error ? error.message : "转写提交失败";
+      const detail = error instanceof Error ? error.message : t("msg.asrSubmitFail");
       setAsrJob({ status: "error", progress: 0, stage: "error", error: detail });
       setMessage(detail);
     }
@@ -912,9 +929,9 @@ export default function App() {
     try {
       const next = await cancelTranscribeJob(asrJob.id);
       setAsrJob(next);
-      setMessage(next.status === "cancelled" ? "已终止转写" : "正在终止转写");
+      setMessage(next.status === "cancelled" ? t("msg.asrCancelled") : t("msg.asrCancelling"));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "终止失败");
+      setMessage(error instanceof Error ? error.message : t("msg.stopFail"));
     }
   }
 
@@ -928,7 +945,7 @@ export default function App() {
     setMarkdown(next);
     setDrawerOpen(false);
     go("dub");
-    setMessage("已填入配音文稿");
+    setMessage(t("msg.filledScript"));
   }
 
   function applyAsrToClone() {
@@ -938,7 +955,7 @@ export default function App() {
     setVoiceFold("clone");
     setDrawerOpen(false);
     go("dub");
-    setMessage("已填入克隆逐字稿");
+    setMessage(t("msg.filledClone"));
   }
 
   async function copyAsrText() {
@@ -954,7 +971,7 @@ export default function App() {
       document.execCommand("copy");
     }
     setAsrCopied(true);
-    setMessage("已复制转写结果");
+    setMessage(t("msg.copiedAsr"));
     window.setTimeout(() => setAsrCopied(false), 2000);
   }
 
@@ -981,7 +998,7 @@ export default function App() {
               verifyAsr: false,
               batchSize,
               language: "English",
-              scriptName: scriptName.trim() || "文稿",
+              scriptName: scriptName.trim() || t("script.fallbackName"),
             })
           : await createJob({
               text: markdown,
@@ -997,7 +1014,7 @@ export default function App() {
               refText: pendingClone ? refText : undefined,
               batchSize,
               language,
-              scriptName: scriptName.trim() || "文稿",
+              scriptName: scriptName.trim() || t("script.fallbackName"),
             });
       setJob(next);
       try {
@@ -1007,7 +1024,7 @@ export default function App() {
       }
       void refreshHistory();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "提交失败");
+      setMessage(error instanceof Error ? error.message : t("msg.submitFail"));
     } finally {
       setBusy(false);
     }
@@ -1017,16 +1034,16 @@ export default function App() {
     try {
       const next = await cancelJob(id);
       setJob(next);
-      setMessage(next.status === "cancelled" ? "已终止配音" : "正在终止，当前批次结束后停下");
+      setMessage(next.status === "cancelled" ? t("msg.dubCancelled") : t("msg.dubCancelling"));
       void refreshHistory();
     } catch (error) {
       if (jobLost(error)) {
         setJob((current) =>
           current && current.id === id
-            ? { ...current, status: "error", error: "任务已中断（服务重启后丢失），请重新点分段配音" }
+            ? { ...current, status: "error", error: t("msg.jobLostRestart") }
             : current,
         );
-        setMessage("任务已经不在了，直接重新生成即可");
+        setMessage(t("msg.jobGoneSimple"));
         try {
           window.localStorage.removeItem(JOB_ID_KEY);
         } catch {
@@ -1034,7 +1051,7 @@ export default function App() {
         }
         return;
       }
-      setMessage(error instanceof Error ? error.message : "终止失败");
+      setMessage(error instanceof Error ? error.message : t("msg.stopFail"));
     }
   }
 
@@ -1060,7 +1077,7 @@ export default function App() {
   async function onKokoroPhonemes() {
     const text = markdown.trim();
     if (!text) {
-      setMessage("请先填写文稿");
+      setMessage(t("msg.needMarkdown"));
       return;
     }
     setPhonemeBusy(true);
@@ -1070,7 +1087,7 @@ export default function App() {
       setPhonemePreview(await previewKokoroPhonemes(text, british));
     } catch (error) {
       setPhonemePreview(null);
-      setMessage(error instanceof Error ? error.message : "无法转写读音");
+      setMessage(error instanceof Error ? error.message : t("msg.phonemeFail"));
     } finally {
       setPhonemeBusy(false);
     }
@@ -1081,7 +1098,7 @@ export default function App() {
     if (!next) return;
     setMarkdown(next);
     setEditorRev((n) => n + 1);
-    setMessage("已写入 Misaki 读音标注。改过的 /音标/ 才会换读音");
+    setMessage(t("msg.phonemeApplied"));
   }
 
   function onLanguageChange(next: string) {
@@ -1099,14 +1116,15 @@ export default function App() {
   function addDesign() {
     const text = instruct.trim();
     if (!text) {
-      setMessage("请先填写音色描述");
+      setMessage(t("msg.needDesign"));
       return;
     }
     if (designs.some((item) => item.instruct === text)) {
-      setMessage("这个描述已经在已选音色里");
+      setMessage(t("msg.designExists"));
       return;
     }
-    const name = VOICE_PRESETS.find((item) => item.text === text)?.label || `描述音色 ${designs.length + 1}`;
+    const preset = VOICE_PRESETS.find((item) => item.text === text);
+    const name = preset ? t(`voices.presets.${preset.id}`) : t("voices.designedName", { n: designs.length + 1 });
     setDesigns((current) => [...current, { id: `d-${Date.now()}`, name, instruct: text }]);
   }
 
@@ -1127,7 +1145,7 @@ export default function App() {
       setPlayingVoiceId(id);
     } catch (error) {
       setPlayingVoiceId(null);
-      setMessage(error instanceof Error ? error.message : "无法播放音色");
+      setMessage(error instanceof Error ? error.message : t("msg.playFail"));
     }
   }
 
@@ -1157,7 +1175,7 @@ export default function App() {
       setPlayingVoiceId(key);
     } catch (error) {
       setPlayingVoiceId(null);
-      setMessage(error instanceof Error ? error.message : "无法试听 Kokoro 音色");
+      setMessage(error instanceof Error ? error.message : t("msg.kokoroPreviewFail"));
     } finally {
       if (needsFetch) setPreviewingSpeaker(null);
     }
@@ -1184,7 +1202,7 @@ export default function App() {
       setPlayingVoiceId(key);
     } catch (error) {
       setPlayingVoiceId(null);
-      setMessage(error instanceof Error ? error.message : "无法试听预设音色");
+      setMessage(error instanceof Error ? error.message : t("msg.speakerPreviewFail"));
     } finally {
       if (needsFetch) setPreviewingSpeaker(null);
     }
@@ -1201,7 +1219,7 @@ export default function App() {
     if (!renamingId) return;
     const name = renameValue.trim();
     if (!name) {
-      setMessage("请填写音色名称");
+      setMessage(t("msg.needVoiceName"));
       return;
     }
     try {
@@ -1209,15 +1227,15 @@ export default function App() {
       setRenamingId(null);
       setVoiceId(updated.id);
       await refresh();
-      setMessage(`已重命名为 ${updated.name}`);
+      setMessage(t("msg.renamed", { name: updated.name }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重命名失败");
+      setMessage(error instanceof Error ? error.message : t("msg.renameFail"));
     }
   }
 
   async function onDeleteVoice(id: string, name?: string) {
     const label = name || id;
-    if (!window.confirm(`删除克隆音色「${label}」？录音会从本机去掉，不能恢复。`)) return;
+    if (!window.confirm(t("msg.confirmDeleteVoice", { name: label }))) return;
     if (playingVoiceId === id) {
       voicePlayerRef.current?.pause();
       setPlayingVoiceId(null);
@@ -1228,9 +1246,9 @@ export default function App() {
       if (voiceId === id) setVoiceId("");
       if (renamingId === id) setRenamingId(null);
       await refresh();
-      setMessage(`已删除 ${label}`);
+      setMessage(t("msg.deleted", { name: label }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "删除失败");
+      setMessage(error instanceof Error ? error.message : t("msg.deleteFail"));
     }
   }
 
@@ -1238,7 +1256,7 @@ export default function App() {
     try {
       await downloadFile(url, filename);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "下载失败");
+      setMessage(error instanceof Error ? error.message : t("msg.downloadFail"));
     }
   }
 
@@ -1256,7 +1274,7 @@ export default function App() {
         /* ignore */
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "找不到成片");
+      setMessage(error instanceof Error ? error.message : t("msg.trackMissing"));
     }
   }
 
@@ -1266,7 +1284,7 @@ export default function App() {
       if (job?.id === id) setJob(null);
       await refreshHistory();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "删除失败");
+      setMessage(error instanceof Error ? error.message : t("msg.deleteFail"));
     }
   }
 
@@ -1280,17 +1298,17 @@ export default function App() {
   function historyHint(item: Job) {
     return [
       formatWhen(item.created_at),
-      item.mode ? MODE_LABEL[item.mode] || item.mode : "",
+      item.mode ? modeLabel(item.mode) : "",
       item.speakers?.length ? item.speakers.join(" / ") : item.speaker || "",
       item.audio_sec ? `${item.audio_sec}s` : "",
       item.chunks && item.speakers && item.speakers.length > 1
-        ? `${item.chunks} 段 × ${item.speakers.length} 音色`
+        ? t("output.historyVoices", { n: item.chunks, voices: item.speakers.length })
         : item.segments?.length
-          ? `${item.segments.length} 段`
+          ? t("common.segments", { n: item.segments.length })
           : item.chunks
-            ? `${item.chunks} 段`
+            ? t("common.segments", { n: item.chunks })
             : "",
-      item.status && item.status !== "done" ? JOB_STATUS[item.status] || item.status : "",
+      item.status && item.status !== "done" ? jobStatusLabel(item.status) : "",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -1328,25 +1346,25 @@ export default function App() {
               : health?.current_mode === "preset"
                 ? health?.custom_model_id
                 : health?.model_id
-          )?.split("/").pop() || "等待模型";
+          )?.split("/").pop() || t("app.waitingModel");
   const modelDetail =
     route === "transcribe"
       ? health?.asr_loaded
-        ? "转写已加载"
+        ? t("status.asrLoaded")
         : health?.asr_model_ready
-          ? "转写就绪"
-          : "转写未下载"
+          ? t("status.asrReady")
+          : t("status.asrMissing")
       : route === "translate"
-        ? `${health?.asr_model_ready ? "转写就绪" : "转写未下载"} · ${
-            health?.instruct_loaded ? "翻译已加载" : health?.instruct_model_ready ? "翻译就绪" : "翻译未下载"
+        ? `${health?.asr_model_ready ? t("status.asrReady") : t("status.asrMissing")} · ${
+            health?.instruct_loaded ? t("status.translateLoaded") : health?.instruct_model_ready ? t("status.translateReady") : t("status.translateMissing")
           }`
         : dubEngine === "kokoro"
           ? health?.kokoro_loaded
-            ? "Kokoro 已加载"
+            ? t("status.kokoroLoaded")
             : health?.kokoro_model_ready
-              ? "Kokoro 就绪"
-              : "Kokoro 未下载"
-        : `${health?.model_loaded ? "已加载" : "未加载"}${health?.custom_model_ready ? " · 预设可用" : " · 预设未下载"}${health?.design_model_ready ? " · 描述可用" : " · 描述未下载"}`;
+              ? t("status.kokoroReady")
+              : t("status.kokoroMissing")
+        : `${health?.model_loaded ? t("status.loaded") : t("status.notLoaded")}${health?.custom_model_ready ? ` · ${t("status.presetReady")}` : ` · ${t("status.presetMissing")}`}${health?.design_model_ready ? ` · ${t("status.designReady")}` : ` · ${t("status.designMissing")}`}`;
 
   if (route === "captions") {
     return <LiveCaptionsPage />;
@@ -1354,7 +1372,7 @@ export default function App() {
 
   return (
     <div className={appClass}>
-      {drawerOpen ? <button type="button" className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setDrawerOpen(false)} /> : null}
+      {drawerOpen ? <button type="button" className="sidebar-backdrop" aria-label={t("sidebar.close")} onClick={() => setDrawerOpen(false)} /> : null}
       <AppSidebar
         route={route}
         collapsed={railCollapsed}
@@ -1368,7 +1386,7 @@ export default function App() {
           <button
             type="button"
             className="menu-btn"
-            aria-label="打开菜单"
+            aria-label={t("sidebar.openMenu")}
             onClick={() => setDrawerOpen(true)}
           >
             <span />
@@ -1376,21 +1394,30 @@ export default function App() {
             <span />
           </button>
           <div className="app-bar-title">
-            <strong>{route === "transcribe" ? "转写" : route === "translate" ? "实时翻译" : "配音"}</strong>
+            <strong>{route === "transcribe" ? t("nav.transcribe") : route === "translate" ? t("nav.translate") : t("nav.dub")}</strong>
             <span>
               {route === "transcribe"
-                ? "语音转文字，结果可填回配音页"
+                ? t("nav.transcribeHint")
                 : route === "translate"
-                  ? "听麦克风或会议，弹出字幕，不接配音队列"
-                  : "音色、文稿、成片并排工作"}
+                  ? t("nav.translateHint")
+                  : t("nav.dubHint")}
             </span>
           </div>
           <button
             type="button"
+            className="locale-btn"
+            onClick={() => setLocale(locale === "zh" ? "en" : "zh")}
+            title={locale === "zh" ? t("locale.switchToEn") : t("locale.switchToZh")}
+            aria-label={locale === "zh" ? t("locale.switchToEn") : t("locale.switchToZh")}
+          >
+            {locale === "zh" ? "EN" : "中"}
+          </button>
+          <button
+            type="button"
             className="theme-btn"
             onClick={toggleTheme}
-            title={theme === "dark" ? "切换到亮色" : "切换到暗色"}
-            aria-label={theme === "dark" ? "切换到亮色主题" : "切换到暗色主题"}
+            title={theme === "dark" ? t("theme.toLight") : t("theme.toDark")}
+            aria-label={theme === "dark" ? t("theme.toLightTheme") : t("theme.toDarkTheme")}
           >
             <ThemeGlyph theme={theme} />
           </button>
@@ -1434,14 +1461,14 @@ export default function App() {
           aria-expanded={!voicesCollapsed}
           title={
             recStatus === "recording"
-              ? "录音中，先停止再折叠"
+              ? t("voices.collapseBusy")
               : voicesCollapsed
-                ? "展开音色"
-                : "折叠音色"
+                ? t("voices.expand")
+                : t("voices.collapse")
           }
         >
-          <h2>音色</h2>
-          <span>{voiceCount} 个已选</span>
+          <h2>{t("voices.title")}</h2>
+          <span>{t("voices.selectedCount", { n: voiceCount })}</span>
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
@@ -1455,42 +1482,42 @@ export default function App() {
           {cloneStudioOpen ? (
             <div className="subpanel">
               <header className="subpanel-head">
-                <h3>录制克隆</h3>
+                <h3>{t("voices.recordTitle")}</h3>
                 <button
                   type="button"
                   className="ghost mini"
                   disabled={recStatus === "recording"}
                   onClick={() => setCloneStudioOpen(false)}
                 >
-                  返回选音色
+                  {t("voices.back")}
                 </button>
               </header>
-              <p className="hint">对着麦克风朗读下面这句，3–10 秒干净人声。保存后会留在本机 `data/voices/`。</p>
+              <p className="hint">{t("voices.recordHint")}</p>
               <form className="stack" onSubmit={onSaveVoice}>
                 <label>
-                  音色名称
+                  {t("voices.name")}
                   <input value={voiceName} onChange={(e) => setVoiceName(e.target.value)} />
                 </label>
                 <div className="rec-script">
-                  <span>请朗读</span>
-                  {CLONE_PROMPT}
+                  <span>{t("voices.pleaseRead")}</span>
+                  {clonePrompt}
                 </div>
                 <div className="rec-bar">
                   {recStatus === "recording" ? (
                     <button type="button" className="rec-stop" onClick={stopMic}>
-                      停止
+                      {t("common.stop")}
                     </button>
                   ) : (
                     <button type="button" onClick={() => void startMic()} disabled={busy}>
-                      开始录音
+                      {t("voices.startRec")}
                     </button>
                   )}
                   <span className={recStatus === "recording" ? "rec-live" : "hint"}>
                     {recStatus === "recording"
-                      ? `录音中 ${recSeconds.toFixed(1)}s / ${REC_MAX_SEC}s`
+                      ? t("voices.recProgress", { sec: recSeconds.toFixed(1), max: REC_MAX_SEC })
                       : recStatus === "ready"
-                        ? `已录 ${recSeconds.toFixed(1)}s`
-                        : "建议 5–8 秒，最长 10 秒"}
+                        ? t("voices.recDone", { sec: recSeconds.toFixed(1) })
+                        : t("voices.recHint")}
                   </span>
                   {recStatus === "ready" ? (
                     <button
@@ -1501,35 +1528,35 @@ export default function App() {
                         setRefFile(null);
                       }}
                     >
-                      重录
+                      {t("voices.rerecord")}
                     </button>
                   ) : null}
                 </div>
                 {recUrl ? <audio className="rec-player" controls src={recUrl} /> : null}
                 <FileField
-                  label="或上传参考音频"
+                  label={t("voices.uploadLabel")}
                   accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
                   file={refFile}
-                  emptyText="wav / m4a / mp3 / 麦克风录音，3–10 秒"
+                  emptyText={t("voices.uploadEmpty")}
                   onChange={(file) => {
                     if (file) clearMicTake();
                     setRefFile(file);
                   }}
                 />
                 <label>
-                  朗读稿（需和录音一致）
+                  {t("voices.transcript")}
                   <textarea
                     rows={3}
                     value={refText}
                     onChange={(e) => setRefText(e.target.value)}
-                    placeholder={CLONE_PROMPT}
+                    placeholder={clonePrompt}
                   />
                 </label>
-                <button type="button" className="ghost mini" onClick={() => setRefText(CLONE_PROMPT)}>
-                  填入门锁模板
+                <button type="button" className="ghost mini" onClick={() => setRefText(clonePrompt)}>
+                  {t("voices.doorTemplate")}
                 </button>
                 <button type="submit" disabled={busy}>
-                  保存到音色库
+                  {t("voices.saveLibrary")}
                 </button>
               </form>
             </div>
@@ -1554,14 +1581,14 @@ export default function App() {
           <p className="hint">
             {dubEngine === "kokoro"
               ? blendingKokoro
-                ? "已选同性音色会按滑条比例归一化后加性融成一个声音，只出一轨。关掉融合则每个音色各出一轨。"
-                : "轻量英文旁白，固定音色，不能克隆或描述。多选且同性时可勾选「融合音色」并调比例。生成时会卸掉 Qwen TTS。"
-              : "预设、描述和克隆可以同时选。同一文稿会为每个已选音色各生成一段短音频。"}
+                ? t("voices.hintBlend")
+                : t("voices.hintKokoro")
+              : t("voices.hintQwen")}
           </p>
           <div className="roster">
             <div className="roster-head">
-              <strong>已选音色</strong>
-              <span>温度 {temperature.toFixed(2)}</span>
+              <strong>{t("voices.selected")}</strong>
+              <span>{t("voices.tempValue", { value: temperature.toFixed(2) })}</span>
             </div>
             {roster.length || pendingClone ? (
               <div className="roster-list">
@@ -1571,42 +1598,42 @@ export default function App() {
                     type="button"
                     className="roster-chip"
                     onClick={item.remove}
-                    title="移出已选"
+                    title={t("voices.remove")}
                   >
-                    <small>{MODE_LABEL[item.kind]}</small>
+                    <small>{modeLabel(item.kind)}</small>
                     {item.name}
                     <span aria-hidden="true">×</span>
                   </button>
                 ))}
                 {pendingClone && dubEngine !== "kokoro" ? (
                   <span className="roster-chip pending">
-                    <small>克隆</small>
-                    未保存参考音频
+                    <small>{t("voices.cloneTag")}</small>
+                    {t("voices.unsavedRef")}
                   </span>
                 ) : null}
               </div>
             ) : (
               <p className="hint">
                 {dubEngine === "kokoro"
-                  ? "还没有选音色。从下面点选 Kokoro 英文音色。"
-                  : "还没有选音色。从下面三类里点选，描述音色点「加入已选」。"}
+                  ? t("voices.emptyKokoro")
+                  : t("voices.emptyQwen")}
               </p>
             )}
           </div>
-          <p className="hint">温度在文稿栏调节，所有已选音色共用。稳定配音另外管句号和时长。</p>
+          <p className="hint">{t("voices.tempHint")}</p>
 
           {dubEngine === "kokoro" ? (
           <FoldSection
-            title="Kokoro 英文音色"
+            title={t("voices.kokoroTitle")}
             badge={`${selectedKokoro.length}`}
             open
             onToggle={() => undefined}
           >
             <p className="hint">
-              可多选。英文旁白，Apache 2.0 可商用。点「试听」听一句。
-              {health?.kokoro_model_ready ? "" : " 当前还没下载 Kokoro 权重，请先运行 `make download-kokoro`。"}
+              {t("voices.kokoroHint")}
+              {health?.kokoro_model_ready ? "" : t("voices.kokoroMissing")}
               {selectedKokoro.length >= 2 && !sameKokoroGender(selectedKokoro)
-                ? " 融合只支持同性音色，当前男女混选，每个音色仍会各出一轨。"
+                ? t("voices.kokoroMixed")
                 : ""}
             </p>
             <div className="blend-row">
@@ -1614,10 +1641,10 @@ export default function App() {
                 className="check"
                 title={
                   canBlendKokoro
-                    ? "按滑条比例把已选音色向量归一化后加性融成一个声音"
+                    ? t("voices.blendTitle")
                     : selectedKokoro.length < 2
-                      ? "至少选两个同性音色才能融合"
-                      : "融合只支持同性音色"
+                      ? t("voices.blendNeedTwo")
+                      : t("voices.blendSameGender")
                 }
               >
                 <input
@@ -1626,7 +1653,7 @@ export default function App() {
                   disabled={!canBlendKokoro}
                   onChange={(e) => setKokoroBlend(e.target.checked)}
                 />
-                融合已选音色
+                {t("voices.blendToggle")}
               </label>
               <button
                 type="button"
@@ -1637,11 +1664,11 @@ export default function App() {
                 onClick={() => void togglePlayKokoro(selectedKokoro)}
               >
                 {previewingSpeaker === "blend"
-                  ? "生成中…"
+                  ? t("common.generating")
                   : playingVoiceId ===
                       `kokoro:${selectedKokoro.map((id) => `${id}:${kokoroWeight(id, kokoroWeights)}`).join(",")}`
-                    ? "暂停"
-                    : "试听融合"}
+                    ? t("common.pause")
+                    : t("voices.previewBlend")}
               </button>
             </div>
             {blendingKokoro ? (
@@ -1656,111 +1683,87 @@ export default function App() {
             ) : null}
             <div className="speaker-grid">
               {kokoroVoices.map((item) => (
-                <div key={item.id} className={selectedKokoro.includes(item.id) ? "speaker-card on" : "speaker-card"}>
-                  <button
-                    type="button"
-                    className={selectedKokoro.includes(item.id) ? "speaker on" : "speaker"}
-                    aria-pressed={selectedKokoro.includes(item.id)}
-                    onClick={() => toggleKokoro(item.id)}
-                  >
-                    {item.label}
-                    <small>
-                      {item.native}
-                      {item.description ? ` · ${item.description}` : ""}
-                    </small>
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost mini"
-                    disabled={health?.kokoro_model_ready === false || previewingSpeaker !== null}
-                    onClick={() => void togglePlayKokoro(item.id)}
-                  >
-                    {previewingSpeaker === item.id
-                      ? "生成中…"
-                      : playingVoiceId === `kokoro:${item.id}`
-                        ? "暂停"
-                        : "试听"}
-                  </button>
-                </div>
+                <SpeakerCard
+                  key={item.id}
+                  kind="kokoro"
+                  id={item.id}
+                  name={item.label}
+                  native={item.native}
+                  description={item.description}
+                  selected={selectedKokoro.includes(item.id)}
+                  previewing={previewingSpeaker === item.id}
+                  playing={playingVoiceId === `kokoro:${item.id}`}
+                  previewDisabled={health?.kokoro_model_ready === false || previewingSpeaker !== null}
+                  onSelect={() => toggleKokoro(item.id)}
+                  onPreview={() => void togglePlayKokoro(item.id)}
+                />
               ))}
             </div>
           </FoldSection>
           ) : (
           <>
           <FoldSection
-            title="预设说话人"
+            title={t("voices.presetTitle")}
             badge={`${selectedSpeakers.length}`}
             open={voiceFold === "preset"}
             onToggle={() => setVoiceFold("preset")}
           >
             <p className="hint">
-              可多选。点「试听」听一句该说话人的样例，第一次会现场生成并缓存。
-              {health?.custom_model_ready ? "" : " 当前还没下载 CustomVoice 权重，请先运行 `make download-custom`。"}
+              {t("voices.presetHint")}
+              {health?.custom_model_ready ? "" : t("voices.customMissing")}
             </p>
             <div className="speaker-grid">
               {speakers.map((item) => (
-                <div key={item.id} className={selectedSpeakers.includes(item.id) ? "speaker-card on" : "speaker-card"}>
-                  <button
-                    type="button"
-                    className={selectedSpeakers.includes(item.id) ? "speaker on" : "speaker"}
-                    aria-pressed={selectedSpeakers.includes(item.id)}
-                    onClick={() => toggleSpeaker(item.id)}
-                  >
-                    {item.label}
-                    <small>
-                      {item.native}
-                      {item.description ? ` · ${item.description}` : ""}
-                    </small>
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost mini"
-                    disabled={health?.custom_model_ready === false || previewingSpeaker !== null}
-                    onClick={() => void togglePlaySpeaker(item.id)}
-                  >
-                    {previewingSpeaker === item.id
-                      ? "生成中…"
-                      : playingVoiceId === `preset:${item.id}`
-                        ? "暂停"
-                        : "试听"}
-                  </button>
-                </div>
+                <SpeakerCard
+                  key={item.id}
+                  kind="speakers"
+                  id={item.id}
+                  name={item.label}
+                  native={item.native}
+                  description={item.description}
+                  selected={selectedSpeakers.includes(item.id)}
+                  previewing={previewingSpeaker === item.id}
+                  playing={playingVoiceId === `preset:${item.id}`}
+                  previewDisabled={health?.custom_model_ready === false || previewingSpeaker !== null}
+                  onSelect={() => toggleSpeaker(item.id)}
+                  onPreview={() => void togglePlaySpeaker(item.id)}
+                />
               ))}
             </div>
             <label>
-              预设语气（可选）
+              {t("voices.styleOptional")}
               <input
                 value={styleInstruct}
                 onChange={(e) => setStyleInstruct(e.target.value)}
-                placeholder="语速平稳，语气中性，不拖腔，句末利落，不要额外停顿。"
+                placeholder={t("voices.stylePlaceholder")}
               />
             </label>
           </FoldSection>
 
           <FoldSection
-            title="描述音色"
+            title={t("voices.designTitle")}
             badge={`${designs.length}`}
             open={voiceFold === "design"}
             onToggle={() => setVoiceFold("design")}
           >
             <p className="hint">
-              不用上传参考音频。写好描述后点「加入已选」，可以加多条。
-              {health?.design_model_ready ? "" : " 当前还没下载 VoiceDesign 权重，请先运行 `make download-design`。"}
+              {t("voices.designHint")}
+              {health?.design_model_ready ? "" : t("voices.designMissing")}
             </p>
             <div className="chips">
               {VOICE_PRESETS.map((preset) => (
                 <button
-                  key={preset.label}
+                  key={preset.id}
                   type="button"
                   className={instruct === preset.text ? "chip on" : "chip"}
                   onClick={() => setInstruct(preset.text)}
                 >
-                  {preset.label}
+                  {t(`voices.presets.${preset.id}`)}
                 </button>
               ))}
             </div>
             <label>
-              音色描述
+              {t("voices.designLabel")}
               <textarea
                 rows={4}
                 value={instruct}
@@ -1769,17 +1772,17 @@ export default function App() {
               />
             </label>
             <button type="button" className="ghost" onClick={addDesign} disabled={!instruct.trim()}>
-              加入已选
+              {t("voices.addSelected")}
             </button>
           </FoldSection>
 
           <FoldSection
-            title="声音克隆"
+            title={t("voices.cloneTitle")}
             badge={`${selectedVoiceIds.length}${voices.length ? `/${voices.length}` : ""}`}
             open={voiceFold === "clone"}
             onToggle={() => setVoiceFold("clone")}
           >
-            <p className="hint">从已保存的克隆里点选。录音和上传在「录制新音色」里。</p>
+            <p className="hint">{t("voices.cloneHint")}</p>
             {voices.length ? (
               <div className="voice-list">
                 {voices.map((voice) => (
@@ -1787,23 +1790,23 @@ export default function App() {
                     <button type="button" className="voice-select" onClick={() => toggleCloneVoice(voice.id)}>
                       <strong>{voice.name}</strong>
                       <small>
-                        {voice.duration_sec ? `${voice.duration_sec}s` : "已保存"}
+                        {voice.duration_sec ? t("voices.duration", { n: voice.duration_sec }) : t("voices.saved")}
                         {voice.ref_text ? ` · ${voice.ref_text.slice(0, 36)}` : ""}
                       </small>
                     </button>
                     <div className="voice-actions">
                       <button type="button" className="ghost mini" onClick={() => void togglePlayVoice(voice.id)}>
-                        {playingVoiceId === voice.id ? "暂停" : "播放"}
+                        {playingVoiceId === voice.id ? t("common.pause") : t("common.play")}
                       </button>
                       <button type="button" className="ghost mini" onClick={() => startRenameVoice(voice)}>
-                        重命名
+                        {t("common.rename")}
                       </button>
                       <button
                         type="button"
                         className="ghost mini"
                         onClick={() => void onDeleteVoice(voice.id, voice.name)}
                       >
-                        删除
+                        {t("common.delete")}
                       </button>
                     </div>
                     {renamingId === voice.id ? (
@@ -1812,13 +1815,13 @@ export default function App() {
                           value={renameValue}
                           onChange={(e) => setRenameValue(e.target.value)}
                           autoFocus
-                          placeholder="新的音色名称"
+                          placeholder={t("voices.renamePlaceholder")}
                         />
                         <button type="submit" disabled={busy || !renameValue.trim()}>
-                          保存
+                          {t("common.save")}
                         </button>
                         <button type="button" className="ghost" onClick={() => setRenamingId(null)}>
-                          取消
+                          {t("common.cancel")}
                         </button>
                       </form>
                     ) : null}
@@ -1826,10 +1829,10 @@ export default function App() {
                 ))}
               </div>
             ) : (
-              <p className="hint">还没有保存过克隆音色。录制一次后会留在本机，下次直接选用。</p>
+              <p className="hint">{t("voices.cloneEmpty")}</p>
             )}
             <button type="button" className="ghost" onClick={() => setCloneStudioOpen(true)}>
-              录制新音色
+              {t("voices.recordNew")}
             </button>
           </FoldSection>
           </>
@@ -1841,8 +1844,8 @@ export default function App() {
 
         <section className="panel studio-script">
           <header className="panel-head">
-            <h2>文稿</h2>
-            <span>{filledSegments.length} 段</span>
+            <h2>{t("script.title")}</h2>
+            <span>{t("common.segments", { n: filledSegments.length })}</span>
           </header>
           <ScriptLists
             scripts={scripts}
@@ -1861,25 +1864,25 @@ export default function App() {
           <form className="stack studio-form" onSubmit={onGenerate}>
             <div className="script-controls">
               <label>
-                语言
+                {t("common.language")}
                 <select
                   value={language}
                   onChange={(e) => onLanguageChange(e.target.value)}
                 >
                   {languages.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.label}
+                      {languageLabel(item.id, item.label)}
                     </option>
                   ))}
                 </select>
               </label>
               <label>
-                并发
+                {t("common.concurrency")}
                 <div className="stepper">
                   <button
                     type="button"
                     className="ghost"
-                    aria-label="减少并发"
+                    aria-label={t("common.minusConcurrency")}
                     disabled={batchSize <= 1}
                     onClick={() => setBatchSize((n) => Math.max(1, n - 1))}
                   >
@@ -1889,7 +1892,7 @@ export default function App() {
                   <button
                     type="button"
                     className="ghost"
-                    aria-label="增加并发"
+                    aria-label={t("common.plusConcurrency")}
                     disabled={batchSize >= 8}
                     onClick={() => setBatchSize((n) => Math.min(8, n + 1))}
                   >
@@ -1900,17 +1903,17 @@ export default function App() {
               <div className="script-checks">
                 <label className="check">
                   <input type="checkbox" checked={stableDub} onChange={(e) => setStableDub(e.target.checked)} />
-                  稳定配音
+                  {t("script.stable")}
                 </label>
                 {dubEngine === "kokoro" ? null : (
-                <label className="check" title={health?.asr_model_ready ? "配完用转写听一遍，对不上的句子再配一次" : "需要先下载 ASR"}>
+                <label className="check" title={health?.asr_model_ready ? t("script.asrTitleReady") : t("script.asrTitleNeed")}>
                   <input
                     type="checkbox"
                     checked={verifyAsr}
                     disabled={health?.asr_model_ready === false}
                     onChange={(e) => setVerifyAsr(e.target.checked)}
                   />
-                  ASR 校对一轮
+                  {t("script.asrProof")}
                 </label>
                 )}
               </div>
@@ -1918,12 +1921,12 @@ export default function App() {
             </div>
             <p className="hint hint-compact">
               {dubEngine === "kokoro"
-                ? "单独一行的 A–Z 会读字母名（A 是 ay，不是冠词 a）。也可用 [nine](/nˈIn/) 指定读音。"
+                ? t("script.hintKokoro")
                 : verifyAsr
-                ? "配完会切到转写模型听一遍，对不上的句子再配一次。时间会更长。"
+                ? t("script.hintAsr")
                 : stableDub
-                ? "Markdown 一项一段。zip 包名是列表名 + 音色 + 时间；里面每段是「文稿 - 音色.wav」，同一句重配会覆盖。"
-                : "已关闭稳定配音，短句语气和时长会更随性。一项一段；zip 内文件名不含时间，重配同句会覆盖。"}
+                ? t("script.hintStable")
+                : t("script.hintUnstable")}
             </p>
             <div
               className={`markdown-wrap${scriptPending?.action === "load" && activeScriptId !== scriptPending.id ? " is-loading" : ""}`}
@@ -1943,37 +1946,37 @@ export default function App() {
               {scriptPending?.action === "load" && activeScriptId !== scriptPending.id ? (
                 <div className="markdown-loading" aria-live="polite">
                   <span className="spin" />
-                  正在载入列表…
+                  {t("script.loadingList")}
                 </div>
               ) : null}
             </div>
             <div className="row meta">
               <button type="button" className="ghost" onClick={addSegment}>
-                添加一项
+                {t("script.addItem")}
               </button>
               <button type="button" className="ghost" onClick={tidyNumbers}>
-                整理编号
+                {t("script.tidy")}
               </button>
               {dubEngine === "kokoro" ? (
                 <button type="button" className="ghost" disabled={phonemeBusy || !markdown.trim()} onClick={() => void onKokoroPhonemes()}>
-                  {phonemeBusy ? "转写中…" : "看读音"}
+                  {phonemeBusy ? t("script.phonemeBusy") : t("script.phoneme")}
                 </button>
               ) : null}
               <FileField
                 label=""
                 accept=".xlsx,.xlsm,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-                emptyText={excelName || "导入 Excel / CSV"}
-                buttonText="导入表格"
+                emptyText={excelName || t("script.importEmpty")}
+                buttonText={t("script.importBtn")}
                 onChange={(file) => void onImportScript(file)}
               />
-              <span>{filledSegments.length} 段</span>
+              <span>{t("common.segments", { n: filledSegments.length })}</span>
             </div>
             {dubEngine === "kokoro" && phonemePreview ? (
               <PhonemeEditor data={phonemePreview} onApply={applyKokoroAnnotated} />
             ) : null}
             <FoldSection
-              title="分段预览"
-              badge={`${filledSegments.length} 段`}
+              title={t("script.previewTitle")}
+              badge={t("common.segments", { n: filledSegments.length })}
               open={previewOpen}
               onToggle={() => setPreviewOpen((current) => !current)}
               className="preview-fold"
@@ -1995,8 +1998,8 @@ export default function App() {
                 onClick={() => job?.id && void onCancelJob(job.id)}
               >
                 {job?.status === "cancelling"
-                  ? "正在终止…"
-                  : `终止配音 · ${Math.round((job?.progress || 0) * 100)}%`}
+                  ? t("script.stopping")
+                  : t("script.stopJob", { pct: Math.round((job?.progress || 0) * 100) })}
               </button>
             ) : (
               <button
@@ -2013,10 +2016,12 @@ export default function App() {
                 }
               >
                 {busy
-                  ? "提交中…"
+                  ? t("common.submitting")
                   : blendingKokoro
-                    ? `分段配音（${filledSegments.length} 段 · 融合）`
-                    : `分段配音（${filledSegments.length} 段${voiceCount > 1 ? ` × ${voiceCount} 音色` : ""}）`}
+                    ? t("script.generateBlend", { n: filledSegments.length })
+                    : voiceCount > 1
+                      ? t("script.generateVoices", { n: filledSegments.length, voices: voiceCount })
+                      : t("script.generate", { n: filledSegments.length })}
               </button>
             )}
           </form>
@@ -2024,16 +2029,16 @@ export default function App() {
 
       <section className="panel studio-output">
         <header className="panel-head">
-          <h2>成片</h2>
+          <h2>{t("output.title")}</h2>
         </header>
         <p className="hint">
           {API_BASE
-            ? "成片在 Mac 的 data/output/。多音色会各出一条完整轨，不要混在一个文件里。"
-            : "多音色会在列表里展开成多条完整轨，各自试听和下载。分段仍可打包成 zip。"}
+            ? t("output.hintMac")
+            : t("output.hintTracks")}
         </p>
         {history.length ? (
           <FoldSection
-            title="历史"
+            title={t("output.history")}
             badge={`${history.length}${job?.title ? ` · ${job.title}` : job?.id ? ` · ${job.id}` : ""}`}
             open={historyOpen}
             onToggle={() => setHistoryOpen((current) => !current)}
@@ -2058,13 +2063,13 @@ export default function App() {
                           disabled={item.status === "cancelling"}
                           onClick={() => void onCancelJob(item.id)}
                         >
-                          {item.status === "cancelling" ? "终止中…" : "终止"}
+                          {item.status === "cancelling" ? t("status.halting") : t("output.stop")}
                         </button>
                       ) : item.status === "done" ? (
                         <>
                           {jobNeedsZip(item) ? (
                             <button type="button" className="ghost mini" onClick={() => void onDownloadZip(item)}>
-                              打包分段
+                              {t("output.zip")}
                             </button>
                           ) : !multi ? (
                             <button
@@ -2077,11 +2082,11 @@ export default function App() {
                                 )
                               }
                             >
-                              下载
+                              {t("common.download")}
                             </button>
                           ) : null}
                           <button type="button" className="ghost mini" onClick={() => void onDeleteHistory(item.id)}>
-                            删除
+                            {t("common.delete")}
                           </button>
                         </>
                       ) : null
@@ -2094,7 +2099,7 @@ export default function App() {
             </div>
           </FoldSection>
         ) : (
-          <p className="hint">还没有成片。生成一次后会留在历史记录里。</p>
+          <p className="hint">{t("output.empty")}</p>
         )}
         {job ? (
           <div className="job">
@@ -2103,15 +2108,26 @@ export default function App() {
             </div>
             <p>
               {job.status === "done"
-                ? `完成 · ${job.chunks || job.segments?.length || 0} 段${
-                    job.speakers && job.speakers.length > 1 ? ` × ${job.speakers.length} 音色` : ""
-                  } · ${job.audio_sec}s · 耗时 ${job.elapsed_sec}s · RTF ${job.rtf}${
-                    verifySummary(job) ? ` · ${verifySummary(job)}` : ""
-                  }`
+                ? `${
+                    job.speakers && job.speakers.length > 1
+                      ? t("output.doneLineVoices", {
+                          n: job.chunks || job.segments?.length || 0,
+                          voices: job.speakers.length,
+                          audio: job.audio_sec ?? "-",
+                          elapsed: job.elapsed_sec ?? "-",
+                          rtf: job.rtf ?? "-",
+                        })
+                      : t("output.doneLine", {
+                          n: job.chunks || job.segments?.length || 0,
+                          audio: job.audio_sec ?? "-",
+                          elapsed: job.elapsed_sec ?? "-",
+                          rtf: job.rtf ?? "-",
+                        })
+                  }${verifySummary(job) ? ` · ${verifySummary(job)}` : ""}`
                 : job.status === "error"
                   ? job.error
                   : job.status === "cancelled"
-                    ? "已终止"
+                    ? t("status.cancelled")
                     : `${jobPhaseLabel(job)} · ${Math.round((job.progress || 0) * 100)}%`}
             </p>
             {jobActive(job.status) ? (
@@ -2121,11 +2137,11 @@ export default function App() {
                 disabled={job.status === "cancelling"}
                 onClick={() => void onCancelJob(job.id)}
               >
-                {job.status === "cancelling" ? "正在终止…" : "终止"}
+                {job.status === "cancelling" ? t("common.stopping") : t("output.stop")}
               </button>
             ) : null}
             {job.status === "done" && job.local_dir && !API_BASE ? (
-              <p className="hint">本机目录 {job.local_dir} · zip「列表名 - 音色 - 时间」· 分段「文稿 - 音色.wav」</p>
+              <p className="hint">{t("output.localHint", { dir: job.local_dir })}</p>
             ) : null}
             {job.status === "done" && jobVoiceTracks(job).length ? (
               <TrackList job={job} tracks={jobVoiceTracks(job)} onDownload={onDownload} />
@@ -2133,7 +2149,7 @@ export default function App() {
             {job.status === "done" && jobNeedsZip(job) ? (
               <div className="tracks">
                 <button type="button" className="ghost" onClick={() => void onDownloadZip(job)}>
-                  打包全部分段
+                  {t("output.zipAll")}
                 </button>
               </div>
             ) : null}
@@ -2142,7 +2158,7 @@ export default function App() {
             ) : null}
           </div>
         ) : history.length ? null : (
-          <p className="hint">生成结果会按编号显示在这里。</p>
+          <p className="hint">{t("output.placeholder")}</p>
         )}
       </section>
       </div>

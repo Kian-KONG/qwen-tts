@@ -1,3 +1,5 @@
+import { getLocale, localeHtmlLang, t } from "./i18n";
+
 export type CaptureSource = "mic" | "share" | "device";
 
 export function recorderFormat(): { mime: string; ext: string } {
@@ -28,12 +30,12 @@ export async function captureAudio(source: CaptureSource, deviceId: string): Pro
     const audio = display.getAudioTracks();
     if (!audio.length) {
       display.getTracks().forEach((track) => track.stop());
-      throw new Error("这次共享没有声音。请勾选「分享标签页音频」，或改用输入设备。");
+      throw new Error(t("live.noShareAudio"));
     }
     return new MediaStream(audio);
   }
   if (source === "device") {
-    if (!deviceId) throw new Error("请选择一个输入设备（BlackHole / Loopback）");
+    if (!deviceId) throw new Error(t("live.pickInput"));
     return navigator.mediaDevices.getUserMedia({
       audio: {
         deviceId: { exact: deviceId },
@@ -52,7 +54,7 @@ export function canDocumentPip(): boolean {
 }
 
 export function copyDocumentChrome(target: Document) {
-  target.documentElement.lang = document.documentElement.lang || "zh-CN";
+  target.documentElement.lang = document.documentElement.lang || localeHtmlLang(getLocale());
   target.documentElement.dataset.theme = document.documentElement.dataset.theme || "dark";
   for (const node of document.head.querySelectorAll("link[rel='stylesheet'], style, link[rel='preconnect']")) {
     target.head.appendChild(node.cloneNode(true));

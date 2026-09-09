@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { KokoroPhonemeSegment, KokoroPhonemeToken, KokoroPhonemes } from "../api";
+import { useI18n } from "../i18n";
 
 function annotateToken(token: KokoroPhonemeToken): string {
   const word = token.text || "";
@@ -28,6 +29,7 @@ export function PhonemeEditor({
   data: KokoroPhonemes;
   onApply: (annotated: string) => void;
 }) {
+  const { t } = useI18n();
   const [segments, setSegments] = useState(data.segments);
 
   useEffect(() => {
@@ -54,13 +56,13 @@ export function PhonemeEditor({
   return (
     <div className="phoneme-box">
       <div className="phoneme-head">
-        <strong>Misaki 读音</strong>
+        <strong>{t("phoneme.title")}</strong>
         <button type="button" className="ghost mini" onClick={() => onApply(numberedScript(segments))}>
-          写入标注
+          {t("phoneme.apply")}
         </button>
       </div>
       <p className="hint hint-compact phoneme-hint">
-        默认音标就是模型读法，原样写入听感不变。改右边音标后再写入。美式：I=aɪ、A=eɪ、O=oʊ、Q=ɔɪ、W=aʊ，例如 nine 是 nˈIn。
+        {t("phoneme.hint")}
       </p>
       <ol className="phoneme-list">
         {segments.map((seg, si) => (
@@ -74,7 +76,7 @@ export function PhonemeEditor({
                     <input
                       value={token.phonemes}
                       spellCheck={false}
-                      aria-label={`${token.text} 音标`}
+                      aria-label={t("phoneme.ipaLabel", { word: token.text })}
                       onChange={(e) => setPhoneme(si, ti, e.target.value)}
                     />
                   </label>

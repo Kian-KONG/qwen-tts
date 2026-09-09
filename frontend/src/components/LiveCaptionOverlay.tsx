@@ -1,4 +1,5 @@
 import type { LiveTranslateLine } from "../api";
+import { useI18n } from "../i18n";
 
 export function LiveCaptionOverlay({
   lines,
@@ -11,19 +12,20 @@ export function LiveCaptionOverlay({
   busy: boolean;
   onStop?: () => void;
 }) {
+  const { t } = useI18n();
   const recent = lines.slice(-4);
   const last = recent[recent.length - 1];
   return (
     <div className="live-overlay">
       <header className="live-overlay-bar">
-        <span>{running ? (busy ? "正在识别并翻译…" : "正在听会议…") : "等待开始"}</span>
+        <span>{running ? (busy ? t("live.recognizing") : t("live.listening")) : t("live.waiting")}</span>
         {onStop ? (
           <button type="button" className="stop mini" onClick={onStop} disabled={!running}>
-            停止
+            {t("common.stop")}
           </button>
         ) : null}
       </header>
-      <p className="live-overlay-target">{last?.target_text || "字幕会出现在这里"}</p>
+      <p className="live-overlay-target">{last?.target_text || t("live.placeholder")}</p>
       {last?.source_text ? <p className="live-overlay-source">{last.source_text}</p> : null}
       {recent.length > 1 ? (
         <ol className="live-overlay-prev">

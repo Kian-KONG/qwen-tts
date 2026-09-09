@@ -215,6 +215,46 @@ _GB_LETTER_NAMES = {
     "W": "dˈʌbᵊljuː",
     "Z": "zˈiː",
 }
+_ISOLATED_DIGIT = re.compile(
+    r"^(?:\[([0-9])\]\(/[^)]*/\)|([0-9]))[。.!?！？,，、;；:：'\"”’)\]]*$"
+)
+_NUMBER_WORDS = {
+    "zero": "0",
+    "oh": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+}
+_ISOLATED_NUMBER_WORD = re.compile(
+    rf"^({'|'.join(_NUMBER_WORDS)})[。.!?！？,，、;；:：'\"”’)\]]*$",
+    re.I,
+)
+_US_DIGIT_NAMES = {
+    "0": "zˈɪɹO",
+    "1": "wˈʌn",
+    "2": "tˈu",
+    "3": "θɹˈi",
+    "4": "fˈɔɹ",
+    "5": "fˈIv",
+    "6": "sˈɪks",
+    "7": "sˈɛvən",
+    "8": "ˈAt",
+    "9": "nˈIn",
+}
+_GB_DIGIT_NAMES = {
+    **_US_DIGIT_NAMES,
+    "0": "zˈɪəɹQ",
+    "2": "tˈuː",
+    "3": "θɹˈiː",
+    "4": "fˈɔː",
+    "7": "sˈɛvᵊn",
+}
 
 
 def isolated_letter(text: str) -> str | None:
@@ -263,36 +303,67 @@ def single_letter_clip(text: str, *, british: bool = False) -> str | None:
     return letter.upper()
 
 
-def _token_letter(token: Any) -> str | None:
-    letters = re.sub(r"[^A-Za-z]", "", str(getattr(token, "text", "") or ""))
+def isolated_digit(text: str) -> str | None:
+    stripped = (text or "").strip()
+    match = _ISOLATED_DIGIT.match(stripped)
+    if match:
+        return match.group(1) or match.group(2)
+    word = _ISOLATED_NUMBER_WORD.match(stripped)
+    if not word:
+        return None
+    return _NUMBER_WORDS[word.group(1).lower()]
+
+
+def digit_name_phonemes(digit: str, *, british: bool = False) -> str:
+    table = _GB_DIGIT_NAMES if british else _US_DIGIT_NAMES
+    return table[digit]
+
+
+def single_digit_clip(text: str, *, british: bool = False) -> str | None:
+    """Bare 0–9 / one–nine. Custom /phonemes/ stay as written."""
+    stripped = (text or "").strip()
+    digit = isolated_digit(stripped)
+    if not digit:
+        return None
+    marked = re.match(r"^\[([0-9])\]\(/([^)]*)/\)[。.!?！？]*$", stripped)
+    if marked:
+        expected = digit_name_phonemes(marked.group(1), british=british)
+        if marked.group(2) != expected:
+            return None
+    return digit
+
+
+def _token_key(token: Any) -> str | None:
+    letters = re.sub(r"[^A-Za-z0-9]", "", str(getattr(token, "text", "") or ""))
     if len(letters) != 1:
         return None
     return letters.upper()
 
 
-def crop_letter_wave(wave: np.ndarray, sample_rate: int, tokens: list | None, letter: str) -> np.ndarray | None:
-    """Cut on token timestamps only. Keep the whole letter; do not eat the onset."""
+def crop_letter_wave(wave: np.ndarray, sample_rate: int, tokens: list | None, target: str) -> np.ndarray | None:
+    """Cut on token timestamps only. Keep the whole unit; do not eat the onset."""
     if wave.size == 0 or sample_rate <= 0 or not tokens:
         return None
+    want = str(target).upper()
     index = None
-    target = None
+    found = None
     for i, token in enumerate(tokens):
-        if _token_letter(token) == letter.upper() and getattr(token, "start_ts", None) is not None:
+        if _token_key(token) == want and getattr(token, "start_ts", None) is not None:
             index = i
-            target = token
-    if target is None:
+            found = token
+    if found is None:
         return None
-    start_t = float(target.start_ts)
+    start_t = float(found.start_ts)
     prev = tokens[index - 1] if index else None
-    if prev is not None and getattr(prev, "end_ts", None) is not None and _token_letter(prev) is None:
+    if prev is not None and getattr(prev, "end_ts", None) is not None and _token_key(prev) is None:
         pause_end = float(prev.end_ts)
         if pause_end <= start_t:
             start_t = pause_end
     start = max(0, int((start_t - 0.012) * sample_rate))
-    end = min(wave.size, int((float(target.end_ts) + 0.09) * sample_rate))
+    end = min(wave.size, int((float(found.end_ts) + 0.09) * sample_rate))
     if end - start < int(sample_rate * 0.12):
-        start = max(0, int(float(target.start_ts) * sample_rate))
-        end = min(wave.size, int((float(target.end_ts) + 0.09) * sample_rate))
+        start = max(0, int(float(found.start_ts) * sample_rate))
+        end = min(wave.size, int((float(found.end_ts) + 0.09) * sample_rate))
     if end - start < int(sample_rate * 0.12):
         return None
     return audio_util.fade_edges(wave[start:end], sample_rate, 8.0)
@@ -420,7 +491,8 @@ class KokoroEngine:
         ids = parse_kokoro_voice_ids(",".join(voice_id) if isinstance(voice_id, list) else voice_id)
         british = kokoro_lang_code(ids[0]) == "b"
         letter = single_letter_clip(text, british=british)
-        if not letter:
+        digit = None if letter else single_digit_clip(text, british=british)
+        if not letter and not digit:
             text = spell_letter_clip(text, british=british)
         blend_path: Path | None = None
         if len(ids) > 1:
@@ -436,7 +508,11 @@ class KokoroEngine:
         lang = kokoro_lang_code(ids[0])
         try:
             if letter:
-                wave, rate = self._generate_letter(letter, voice_arg, lang)
+                wave, rate = self._generate_carried(letter, voice_arg, lang, prefix="Letter")
+                if wave.size:
+                    parts.append(wave)
+            elif digit:
+                wave, rate = self._generate_carried(digit, voice_arg, lang, prefix="Number")
                 if wave.size:
                     parts.append(wave)
             else:
@@ -458,20 +534,20 @@ class KokoroEngine:
             raise RuntimeError(f"No audio generated for {','.join(ids)}")
         return (np.concatenate(parts) if len(parts) > 1 else parts[0], rate)
 
-    def _generate_letter(self, letter: str, voice_arg: str, lang: str) -> tuple[np.ndarray, int]:
+    def _generate_carried(self, spoken: str, voice_arg: str, lang: str, *, prefix: str) -> tuple[np.ndarray, int]:
         pipeline = self.model._get_pipeline(lang)
         pipeline.voices = {}
-        carrier = f"Letter. {letter}."
+        carrier = f"{prefix}. {spoken}."
         rate = self.sample_rate
         for result in pipeline(carrier, voice=voice_arg, speed=1.0, split_pattern=None):
             wave = self._wave_from_audio(result.audio)
             rate = int(getattr(self.model, "sample_rate", rate) or rate)
-            cropped = crop_letter_wave(wave, rate, result.tokens, letter)
+            cropped = crop_letter_wave(wave, rate, result.tokens, spoken)
             if cropped is not None and cropped.size:
                 return cropped, rate
             if wave.size:
                 return wave, rate
-        raise RuntimeError(f"No audio generated for letter {letter}")
+        raise RuntimeError(f"No audio generated for {prefix} {spoken}")
 
     def synthesize(
         self,
@@ -540,12 +616,15 @@ class KokoroEngine:
                         spoken = audio_util.normalize_tts_text(chunk)
                         audio, rate = self._generate_one(spoken, voice_ids, voice.get("weights"))
                         native_sr = rate
-                        letter = single_letter_clip(spoken, british=kokoro_lang_code(voice_ids[0]) == "b")
+                        british = kokoro_lang_code(voice_ids[0]) == "b"
+                        carried = single_letter_clip(spoken, british=british) or single_digit_clip(
+                            spoken, british=british
+                        )
                         wav = audio_util.polish_clip(
                             audio,
                             rate,
-                            short=False if letter else audio_util.is_short_clip(spoken, audio, rate),
-                            pad_ms=80 if letter else None,
+                            short=False if carried else audio_util.is_short_clip(spoken, audio, rate),
+                            pad_ms=80 if carried else None,
                         )
                         wavs.append(wav)
                         if progress_cb:

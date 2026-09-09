@@ -9,6 +9,7 @@ import {
   type LiveTranslateLine,
 } from "../api";
 import { LIVE_CAPTION_CHANNEL, isCaptionEvent } from "../liveCaptions";
+import { I18nProvider, languageLabel, useI18n } from "../i18n";
 import {
   canDocumentPip,
   captureAudio,
@@ -28,6 +29,7 @@ export function LiveTranslatePanel({
   health: Health | null;
   languages: Language[];
 }) {
+  const { t, locale } = useI18n();
   const [sourceLanguage, setSourceLanguage] = useState("Auto");
   const [targetLanguage, setTargetLanguage] = useState("English");
   const [captureSource, setCaptureSource] = useState<CaptureSource>("mic");
@@ -89,9 +91,11 @@ export function LiveTranslatePanel({
     busyRef.current = busy;
     channelRef.current?.postMessage({ type: "state", lines, running, busy });
     pipRootRef.current?.render(
-      <LiveCaptionOverlay lines={lines} running={running} busy={busy} onStop={() => void halt()} />,
+      <I18nProvider>
+        <LiveCaptionOverlay lines={lines} running={running} busy={busy} onStop={() => void halt()} />
+      </I18nProvider>,
     );
-  }, [lines, running, busy]);
+  }, [lines, running, busy, locale]);
 
   useEffect(() => {
     if (captureSource !== "device") return;
@@ -122,7 +126,7 @@ export function LiveTranslatePanel({
       }
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "这一段翻译失败");
+      setError(err instanceof Error ? err.message : t("msg.translateChunkFail"));
     } finally {
       sendingRef.current = false;
       setBusy(false);
@@ -181,7 +185,7 @@ export function LiveTranslatePanel({
           void flush();
         }
       };
-      recorder.onerror = () => setError("录音失败");
+      recorder.onerror = () => setError(t("msg.recFail"));
       stream.getAudioTracks().forEach((track) => {
         track.onended = () => void halt();
       });
@@ -193,7 +197,7 @@ export function LiveTranslatePanel({
     } catch (err) {
       stream?.getTracks().forEach((track) => track.stop());
       await halt();
-      setError(err instanceof Error ? err.message : "无法开始实时翻译");
+      setError(err instanceof Error ? err.message : t("msg.liveStartFail"));
     } finally {
       setStarting(false);
     }
@@ -215,7 +219,9 @@ export function LiveTranslatePanel({
         pipRootRef.current = root;
         pipWinRef.current = pip;
         root.render(
-          <LiveCaptionOverlay lines={lines} running={running} busy={busy} onStop={() => void halt()} />,
+          <I18nProvider>
+            <LiveCaptionOverlay lines={lines} running={running} busy={busy} onStop={() => void halt()} />
+          </I18nProvider>,
         );
         pip.addEventListener("pagehide", () => {
           root.unmount();
@@ -225,7 +231,7 @@ export function LiveTranslatePanel({
         return;
       } catch (err) {
         if (err instanceof DOMException && err.name === "NotAllowedError") {
-          setError("浏览器拒绝了置顶小窗");
+          setError(t("msg.pipDenied"));
           return;
         }
       }
@@ -233,7 +239,7 @@ export function LiveTranslatePanel({
     const url = new URL(window.location.href);
     url.hash = "#/captions";
     const popup = window.open(url.toString(), "qwen-captions", "popup=yes,width=480,height=320");
-    if (!popup) setError("浏览器拦截了弹窗，请允许后重试");
+    if (!popup) setError(t("msg.popupBlocked"));
   }
 
   async function onCopy() {
@@ -246,61 +252,61 @@ export function LiveTranslatePanel({
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch {
-      setError("复制失败");
+      setError(t("msg.copyFail"));
     }
   }
 
   const captureHint =
     captureSource === "share"
-      ? "开始后选择会议所在标签页，并勾选分享音频。不要同时开麦。"
+      ? t("live.hintShare")
       : captureSource === "device"
-        ? "把会议输出接到 BlackHole 或多输出设备（扬声器 + 虚拟设备），再选那个输入。不要同时开麦。"
-        : "对着麦克风说话，每隔几秒出一列原文和译文。网页会议用共享标签页音频；桌面会议用虚拟输入。";
+        ? t("live.hintDevice")
+        : t("live.hintMic");
 
   return (
     <section className="live-workspace">
       <div className="panel live-side">
         <header className="panel-head">
-          <h2>实时翻译</h2>
+          <h2>{t("live.title")}</h2>
         </header>
         <p className="hint">
-          {captureHint} 不接配音队列。第一次会卸掉 TTS，同时加载转写和翻译模型。
-          {health?.asr_model_ready === false ? " 请先运行 `make download-asr`。" : ""}
-          {health?.instruct_model_ready === false ? " 请先运行 `make download-instruct`。" : ""}
+          {captureHint} {t("live.hint")}
+          {health?.asr_model_ready === false ? t("live.needAsr") : ""}
+          {health?.instruct_model_ready === false ? t("live.needInstruct") : ""}
         </p>
         <div className="stack">
           <label>
-            音频来源
+            {t("live.source")}
             <select
               value={captureSource}
               disabled={running || starting}
               onChange={(e) => setCaptureSource(e.target.value as CaptureSource)}
             >
-              <option value="mic">麦克风</option>
-              <option value="share">共享会议声音</option>
-              <option value="device">输入设备</option>
+              <option value="mic">{t("live.mic")}</option>
+              <option value="share">{t("live.share")}</option>
+              <option value="device">{t("live.device")}</option>
             </select>
           </label>
           {captureSource === "device" ? (
             <label>
-              输入设备
+              {t("live.device")}
               <select
                 value={deviceId}
                 disabled={running || starting}
                 onChange={(e) => setDeviceId(e.target.value)}
                 onFocus={() => void refreshDevices()}
               >
-                <option value="">请选择 BlackHole / Loopback</option>
+                <option value="">{t("live.pickDevice")}</option>
                 {devices.map((item, index) => (
                   <option key={item.deviceId || index} value={item.deviceId}>
-                    {item.label || `输入设备 ${index + 1}`}
+                    {item.label || t("live.deviceN", { n: index + 1 })}
                   </option>
                 ))}
               </select>
             </label>
           ) : null}
           <label>
-            源语言
+            {t("live.sourceLang")}
             <select
               value={sourceLanguage}
               disabled={running || starting}
@@ -308,13 +314,13 @@ export function LiveTranslatePanel({
             >
               {languages.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.label}
+                  {languageLabel(item.id, item.label)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            目标语言
+            {t("live.targetLang")}
             <select
               value={targetLanguage}
               disabled={running || starting}
@@ -322,7 +328,7 @@ export function LiveTranslatePanel({
             >
               {targets.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.label}
+                  {languageLabel(item.id, item.label)}
                 </option>
               ))}
             </select>
@@ -330,7 +336,7 @@ export function LiveTranslatePanel({
           <div className="live-actions">
             {running ? (
               <button type="button" className="stop" onClick={() => void halt()}>
-                停止
+                {t("common.stop")}
               </button>
             ) : (
               <button
@@ -339,15 +345,15 @@ export function LiveTranslatePanel({
                 onClick={() => void onStart()}
                 disabled={!ready || starting || !deviceReady}
               >
-                {starting ? "正在加载模型…" : captureSource === "mic" ? "开始听写翻译" : "开始听会议"}
+                {starting ? t("live.loadingModel") : captureSource === "mic" ? t("live.startMic") : t("live.startMeeting")}
               </button>
             )}
             <button type="button" className="ghost" onClick={() => void onPop()}>
-              弹出字幕
+              {t("live.popCaptions")}
             </button>
           </div>
           <p className="hint">
-            {running ? (busy ? "正在识别并翻译…" : "正在听…") : health?.instruct_loaded ? "翻译模型已加载" : "翻译模型未加载"}
+            {running ? (busy ? t("live.recognizing") : t("live.listeningShort")) : health?.instruct_loaded ? t("live.modelOn") : t("live.modelOff")}
           </p>
           {error ? <p className="flash">{error}</p> : null}
         </div>
@@ -355,9 +361,9 @@ export function LiveTranslatePanel({
       <div className="live-captions">
         <div className="panel live-caption">
           <header className="panel-head">
-            <h2>原文</h2>
+            <h2>{t("live.sourceText")}</h2>
             <button type="button" className="ghost mini" onClick={() => setLines([])} disabled={!lines.length}>
-              清空
+              {t("common.clear")}
             </button>
           </header>
           <ol className="live-lines">
@@ -368,9 +374,9 @@ export function LiveTranslatePanel({
         </div>
         <div className="panel live-caption">
           <header className="panel-head">
-            <h2>译文</h2>
+            <h2>{t("live.targetText")}</h2>
             <button type="button" className="ghost mini" onClick={() => void onCopy()} disabled={!lines.length}>
-              {copied ? "已复制" : "复制"}
+              {copied ? t("common.copied") : t("common.copy")}
             </button>
           </header>
           <ol className="live-lines">

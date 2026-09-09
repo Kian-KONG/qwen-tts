@@ -1,10 +1,11 @@
 import { apiUrl, type Job, type JobSegment, type JobTrack } from "../api";
+import { t } from "../i18n";
 
 export function clipLabel(segment: { text?: string | null; voice?: string | null; filename?: string | null }): string {
   const text = (segment.text || "").trim();
   if (text) return text;
   if (segment.filename) return segment.filename.replace(/\.wav$/i, "");
-  return "片段";
+  return t("output.clip");
 }
 
 export function wavName(label: string): string {
@@ -56,7 +57,7 @@ export function jobVoiceTracks(job: Job): JobTrack[] {
 
 export function jobTrackName(job: Job, track: JobTrack): string {
   if (track.filename) return wavName(track.filename);
-  const voice = (track.voice || "").trim() || `音色${track.index}`;
+  const voice = (track.voice || "").trim() || t("output.voiceN", { n: track.index });
   return wavName(`${job.script_name || job.title || job.id} - ${voice}`);
 }
 

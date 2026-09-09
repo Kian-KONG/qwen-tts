@@ -1,4 +1,5 @@
 import type { AppRoute } from "../route";
+import { useI18n } from "../i18n";
 
 export type ThemeName = "light" | "dark";
 
@@ -78,10 +79,10 @@ export function ThemeGlyph({ theme }: { theme: ThemeName }) {
   return theme === "dark" ? <IconSun /> : <IconMoon />;
 }
 
-const ITEMS: { id: AppRoute; label: string; icon: typeof IconDub }[] = [
-  { id: "dub", label: "配音", icon: IconDub },
-  { id: "transcribe", label: "转写", icon: IconAsr },
-  { id: "translate", label: "实时翻译", icon: IconTranslate },
+const ITEMS: { id: AppRoute; icon: typeof IconDub; labelKey: string }[] = [
+  { id: "dub", labelKey: "nav.dub", icon: IconDub },
+  { id: "transcribe", labelKey: "nav.transcribe", icon: IconAsr },
+  { id: "translate", labelKey: "nav.translate", icon: IconTranslate },
 ];
 
 export function AppSidebar({
@@ -99,29 +100,32 @@ export function AppSidebar({
   onToggle: () => void;
   onTheme: () => void;
 }) {
-  const nextLabel = theme === "dark" ? "亮色" : "暗色";
+  const { t, locale, setLocale } = useI18n();
+  const nextTheme = theme === "dark" ? "light" : "dark";
+  const nextLocale = locale === "zh" ? "en" : "zh";
   return (
     <aside className="sidebar">
-      <div className="sidebar-brand" title="Qwen3-TTS 配音台">
-        <span className="sidebar-mark">Q</span>
+      <div className="sidebar-brand" title={t("app.brandTitle")}>
+        <span className="sidebar-mark">T</span>
         <div className="sidebar-brand-text">
-          <strong>Qwen3-TTS</strong>
-          <span>配音台</span>
+          <strong>TTS</strong>
+          <span>{t("app.studio")}</span>
         </div>
       </div>
       <nav className="sidebar-nav">
         {ITEMS.map((item) => {
           const Icon = item.icon;
+          const label = t(item.labelKey);
           return (
             <button
               key={item.id}
               type="button"
               className={route === item.id ? "sidebar-link on" : "sidebar-link"}
               onClick={() => onGo(item.id)}
-              title={item.label}
+              title={label}
             >
               <Icon />
-              <span>{item.label}</span>
+              <span>{label}</span>
             </button>
           );
         })}
@@ -129,20 +133,30 @@ export function AppSidebar({
       <div className="sidebar-foot">
         <button
           type="button"
+          className="sidebar-locale"
+          onClick={() => setLocale(nextLocale)}
+          title={nextLocale === "en" ? t("locale.switchToEn") : t("locale.switchToZh")}
+          aria-label={nextLocale === "en" ? t("locale.switchToEn") : t("locale.switchToZh")}
+        >
+          <span className="sidebar-locale-mark">{nextLocale === "en" ? "EN" : "中"}</span>
+          <span>{t(nextLocale === "en" ? "locale.en" : "locale.zh")}</span>
+        </button>
+        <button
+          type="button"
           className="sidebar-theme"
           onClick={onTheme}
-          title={`切换到${nextLabel}`}
-          aria-label={`切换到${nextLabel}主题`}
+          title={nextTheme === "light" ? t("theme.toLight") : t("theme.toDark")}
+          aria-label={nextTheme === "light" ? t("theme.toLightTheme") : t("theme.toDarkTheme")}
         >
           <ThemeGlyph theme={theme} />
-          <span>{nextLabel}</span>
+          <span>{t(nextTheme === "light" ? "theme.light" : "theme.dark")}</span>
         </button>
         <button
           type="button"
           className="sidebar-collapse"
           onClick={onToggle}
-          title={collapsed ? "展开侧栏" : "折叠侧栏"}
-          aria-label={collapsed ? "展开侧栏" : "折叠侧栏"}
+          title={collapsed ? t("sidebar.expandRail") : t("sidebar.collapseRail")}
+          aria-label={collapsed ? t("sidebar.expandRail") : t("sidebar.collapseRail")}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -154,7 +168,7 @@ export function AppSidebar({
               strokeLinejoin="round"
             />
           </svg>
-          <span>{collapsed ? "展开" : "折叠"}</span>
+          <span>{collapsed ? t("sidebar.expand") : t("sidebar.collapse")}</span>
         </button>
       </div>
     </aside>

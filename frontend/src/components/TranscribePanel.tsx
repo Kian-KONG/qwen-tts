@@ -1,16 +1,20 @@
 import { FileField } from "./FileField";
 import type { Health, Language, Transcript } from "../api";
+import { languageLabel, useI18n } from "../i18n";
 
-const ASR_STAGES: Record<string, string> = {
-  queued: "排队中",
-  converting: "转换音频",
-  loading: "加载转写模型",
-  transcribing: "识别中",
-  cancelling: "正在终止",
-  cancelled: "已终止",
-  done: "完成",
-  error: "失败",
-};
+function asrStageLabel(stage: string, t: (path: string) => string): string {
+  const keys: Record<string, string> = {
+    queued: "status.queued",
+    converting: "asr.converting",
+    loading: "asr.loadingModel",
+    transcribing: "asr.transcribing",
+    cancelling: "status.cancelling",
+    cancelled: "status.cancelled",
+    done: "status.done",
+    error: "status.error",
+  };
+  return keys[stage] ? t(keys[stage]) : stage;
+}
 
 export function TranscribePanel({
   health,
@@ -45,30 +49,31 @@ export function TranscribePanel({
   onApplyToScript: () => void;
   onApplyToClone: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <section className="asr-workspace">
       <div className="panel asr-side">
         <header className="panel-head">
-          <h2>语音转文字</h2>
+          <h2>{t("asr.title")}</h2>
         </header>
         <p className="hint">
-          上传音频后会显示进度；第一次会先卸载 TTS、加载 Qwen3-ASR 1.7B。转写完成后可填入配音页。
-          {health?.asr_model_ready ? "" : " 当前还没下载 ASR 权重，请先运行 `make download-asr`。"}
+          {t("asr.hint")}
+          {health?.asr_model_ready ? "" : t("asr.missing")}
         </p>
         <div className="stack">
           <FileField
-            label="音频"
+            label={t("asr.audio")}
             accept="audio/wav,audio/mpeg,audio/mp4,audio/*"
             file={asrFile}
             emptyText="wav / m4a / mp3"
             onChange={onFile}
           />
           <label>
-            语言
+            {t("common.language")}
             <select value={asrLanguage} onChange={(e) => onLanguage(e.target.value)}>
               {languages.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.label}
+                  {languageLabel(item.id, item.label)}
                 </option>
               ))}
             </select>
@@ -80,7 +85,7 @@ export function TranscribePanel({
               disabled={asrJob.status === "cancelling"}
               onClick={onCancel}
             >
-              {asrJob.status === "cancelling" ? "正在终止…" : "终止转写"}
+              {asrJob.status === "cancelling" ? t("common.stopping") : t("asr.stop")}
             </button>
           ) : (
             <button
@@ -88,7 +93,7 @@ export function TranscribePanel({
               onClick={onTranscribe}
               disabled={!asrFile || health?.asr_model_ready === false}
             >
-              开始转写
+              {t("asr.start")}
             </button>
           )}
           {asrJob ? (
@@ -98,14 +103,23 @@ export function TranscribePanel({
               </div>
               <p>
                 {asrJob.status === "done"
-                  ? `完成 · ${asrJob.segments?.length || 1} 段 · ${asrJob.duration_sec ?? "-"}s · 耗时 ${asrJob.elapsed_sec ?? "-"}s · ${asrJob.language || asrLanguage}`
+                  ? t("asr.doneLine", {
+                      n: asrJob.segments?.length || 1,
+                      duration: asrJob.duration_sec ?? "-",
+                      elapsed: asrJob.elapsed_sec ?? "-",
+                      language: asrJob.language || asrLanguage,
+                    })
                   : asrJob.status === "error"
                     ? asrJob.error
                     : asrJob.status === "cancelled"
-                      ? "已终止"
+                      ? t("status.cancelled")
                       : asrJob.chunk && asrJob.chunks
-                      ? `识别中 ${asrJob.chunk}/${asrJob.chunks} · ${Math.round((asrJob.progress || 0) * 100)}%`
-                      : `${ASR_STAGES[asrJob.stage || asrJob.status || ""] || asrJob.stage || asrJob.status} · ${Math.round((asrJob.progress || 0) * 100)}%`}
+                      ? t("asr.runningLine", {
+                          chunk: asrJob.chunk,
+                          chunks: asrJob.chunks,
+                          pct: Math.round((asrJob.progress || 0) * 100),
+                        })
+                      : `${asrStageLabel(asrJob.stage || asrJob.status || "", t)} · ${Math.round((asrJob.progress || 0) * 100)}%`}
               </p>
             </div>
           ) : null}
@@ -113,9 +127,9 @@ export function TranscribePanel({
       </div>
       <div className="panel asr-result-pane">
         <header className="panel-head">
-          <h2>转写结果</h2>
+          <h2>{t("asr.result")}</h2>
           <p className="hint">
-            {health?.asr_loaded ? "转写模型已加载" : health?.asr_model_ready ? "转写模型就绪，未加载" : "转写未下载"}
+            {health?.asr_loaded ? t("asr.modelLoaded") : health?.asr_model_ready ? t("asr.modelReady") : t("status.asrMissing")}
           </p>
         </header>
         <textarea
@@ -123,17 +137,17 @@ export function TranscribePanel({
           className="asr-result"
           value={asrText}
           onChange={(e) => onTextChange(e.target.value)}
-          placeholder="识别结果会出现在这里，可再编辑。"
+          placeholder={t("asr.placeholder")}
         />
         <div className="row">
           <button type="button" className="ghost" onClick={onCopy} disabled={!asrText.trim()}>
-            {asrCopied ? "已复制" : "复制结果"}
+            {asrCopied ? t("common.copied") : t("asr.copy")}
           </button>
           <button type="button" className="ghost" onClick={onApplyToScript} disabled={!asrText.trim()}>
-            填入配音文稿
+            {t("asr.toScript")}
           </button>
           <button type="button" className="ghost" onClick={onApplyToClone} disabled={!asrText.trim()}>
-            填入克隆逐字稿
+            {t("asr.toClone")}
           </button>
         </div>
       </div>

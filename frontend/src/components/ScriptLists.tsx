@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import type { ScriptList } from "../api";
+import { languageLabel, useI18n } from "../i18n";
 import { FoldSection } from "./FoldSection";
 
 export type ScriptPending = {
@@ -34,6 +35,7 @@ export function ScriptLists({
   onRename: (id: string, name: string) => void;
   onDelete: (id: string, name: string) => void;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -41,9 +43,9 @@ export function ScriptLists({
   const busy = Boolean(pending);
   const listing = pending?.action === "list";
 
-  function languageLabel(id?: string) {
+  function scriptLanguage(id?: string) {
     if (!id) return "";
-    return languages.find((item) => item.id === id)?.label || id;
+    return languageLabel(id, languages.find((item) => item.id === id)?.label || id);
   }
 
   function startRename(item: ScriptList) {
@@ -60,27 +62,27 @@ export function ScriptLists({
 
   return (
     <FoldSection
-      title="配音列表"
+      title={t("lists.title")}
       badge={`${scripts.length}${active ? ` · ${active.name}` : ""}`}
       open={open}
       onToggle={() => setOpen((current) => !current)}
     >
-      <p className="hint">保存当前编号文稿；载入会替换下面的列表。保存在本机 data/scripts/。</p>
+      <p className="hint">{t("lists.hint")}</p>
       <div className="script-save">
         <input
           value={name}
           onChange={(event) => onName(event.target.value)}
-          placeholder="列表名称，如 门锁中文"
+          placeholder={t("lists.namePlaceholder")}
           disabled={busy}
         />
         <button type="button" className="ghost mini" disabled={busy || !canSave || !name.trim()} onClick={onSave}>
           {pending?.action === "save" ? (
             <>
               <span className="spin" />
-              保存中…
+              {t("common.saving")}
             </>
           ) : (
-            "保存为新列表"
+            t("lists.saveNew")
           )}
         </button>
         {activeId ? (
@@ -88,10 +90,10 @@ export function ScriptLists({
             {pending?.action === "update" ? (
               <>
                 <span className="spin" />
-                更新中…
+                {t("common.updating")}
               </>
             ) : (
-              "更新当前"
+              t("lists.update")
             )}
           </button>
         ) : null}
@@ -99,7 +101,7 @@ export function ScriptLists({
       {listing ? (
         <p className="hint loading-line">
           <span className="spin" />
-          读取已保存的列表…
+          {t("lists.loading")}
         </p>
       ) : scripts.length ? (
         <div className="voice-list">
@@ -112,8 +114,8 @@ export function ScriptLists({
                 <button type="button" className="voice-select" disabled={busy} onClick={() => onLoad(item.id)}>
                   <strong>{item.name}</strong>
                   <small>
-                    {count} 段
-                    {item.language ? ` · ${languageLabel(item.language)}` : ""}
+                    {t("common.segments", { n: count })}
+                    {item.language ? ` · ${scriptLanguage(item.language)}` : ""}
                     {item.preview ? ` · ${item.preview}` : ""}
                   </small>
                 </button>
@@ -122,23 +124,23 @@ export function ScriptLists({
                     {loadingThis ? (
                       <>
                         <span className="spin" />
-                        载入中…
+                        {t("common.loading")}
                       </>
                     ) : (
-                      "载入"
+                      t("lists.load")
                     )}
                   </button>
                   <button type="button" className="ghost mini" disabled={busy} onClick={() => startRename(item)}>
-                    重命名
+                    {t("common.rename")}
                   </button>
                   <button type="button" className="ghost mini" disabled={busy} onClick={() => onDelete(item.id, item.name)}>
                     {deletingThis ? (
                       <>
                         <span className="spin" />
-                        删除中…
+                        {t("common.deleting")}
                       </>
                     ) : (
-                      "删除"
+                      t("common.delete")
                     )}
                   </button>
                 </div>
@@ -148,14 +150,14 @@ export function ScriptLists({
                       value={renameValue}
                       onChange={(event) => setRenameValue(event.target.value)}
                       autoFocus
-                      placeholder="新的列表名称"
+                      placeholder={t("lists.renamePlaceholder")}
                       disabled={busy}
                     />
                     <button type="submit" disabled={busy || !renameValue.trim()}>
-                      保存
+                      {t("common.save")}
                     </button>
                     <button type="button" className="ghost" onClick={() => setRenamingId(null)}>
-                      取消
+                      {t("common.cancel")}
                     </button>
                   </form>
                 ) : null}
@@ -164,7 +166,7 @@ export function ScriptLists({
           })}
         </div>
       ) : (
-        <p className="hint">还没有保存过列表。写好文稿后起个名字，点「保存为新列表」。</p>
+        <p className="hint">{t("lists.empty")}</p>
       )}
     </FoldSection>
   );

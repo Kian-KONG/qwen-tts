@@ -1,8 +1,10 @@
+import { useI18n } from "../i18n";
+
 export function FileField({
   label,
   accept,
   file,
-  emptyText = "未选择文件",
+  emptyText,
   buttonText,
   onChange,
 }: {
@@ -13,12 +15,13 @@ export function FileField({
   buttonText?: string;
   onChange: (file: File | null) => void;
 }) {
+  const { t } = useI18n();
   return (
     <label className="file-field-wrap">
       {label ? label : null}
       <span className="file-field">
-        <span className="file-name">{file ? file.name : emptyText}</span>
-        <span className="file-btn">{buttonText || (file ? "更换文件" : "选择文件")}</span>
+        <span className="file-name">{file ? file.name : emptyText ?? t("file.none")}</span>
+        <span className="file-btn">{buttonText || (file ? t("file.replace") : t("file.choose"))}</span>
         <input
           type="file"
           accept={accept}

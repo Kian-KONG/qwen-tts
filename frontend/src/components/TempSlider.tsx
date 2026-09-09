@@ -1,7 +1,10 @@
+import { useI18n } from "../i18n";
+
 export function TempSlider({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const { t } = useI18n();
   return (
     <label className="temp-control">
-      温度 temp
+      {t("output.temp")}
       <div className="temp-row">
         <input
           type="range"
