@@ -375,7 +375,7 @@ html {
 
 .studio {
   --voices-col: 360px;
-  grid-template-columns: var(--voices-col) minmax(0, 1fr) auto;
+  grid-template-columns: var(--voices-col) minmax(280px, 1.08fr) minmax(340px, 1fr);
   align-items: stretch;
 }
 
@@ -559,8 +559,8 @@ html {
 }
 
 .panel.studio-output {
-  width: min(34vw, 560px);
-  min-width: 280px;
+  width: auto;
+  min-width: 0;
   min-height: 0;
   align-self: stretch;
   overflow: hidden;
@@ -584,7 +584,8 @@ html {
 }
 
 .takes-list {
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .takes-empty {
@@ -1708,6 +1709,7 @@ button .spin,
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   min-height: 32px;
 }
 
@@ -1835,6 +1837,23 @@ button .spin,
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+.studio-output .theme-audio {
+  flex: 1 1 140px;
+  max-width: none;
+  min-width: 96px;
+  padding-right: 4px;
+}
+
+.studio-output .theme-audio input[type="range"] {
+  min-width: 0;
+}
+
+.studio-output .clip-voice > strong,
+.studio-output .clip-voice-label {
+  flex: 0 0 156px;
+  max-width: 156px;
 }
 
 .button.ghost {

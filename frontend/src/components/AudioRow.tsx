@@ -14,11 +14,12 @@ export function AudioRow({
   actions?: ReactNode;
   onLabelClick?: () => void;
 }) {
-  const name = <strong title={title || label}>{label}</strong>;
+  const tip = title || label;
+  const name = <strong title={tip}>{label}</strong>;
   return (
     <div className="clip-voice">
       {onLabelClick ? (
-        <button type="button" className="clip-voice-label" onClick={onLabelClick}>
+        <button type="button" className="clip-voice-label" title={tip} onClick={onLabelClick}>
           {name}
         </button>
       ) : (

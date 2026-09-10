@@ -2077,7 +2077,7 @@ export default function App() {
                 <div key={live.id} className={selected ? "media-card on" : "media-card"}>
                   <AudioRow
                     label={displayJobTitle(live)}
-                    title={historyHint(live)}
+                    title={displayJobTitle(live)}
                     src={live.status === "done" && !multi ? live.download_url || tracks[0]?.url : undefined}
                     onLabelClick={() => void openHistory(live.id)}
                     actions={
