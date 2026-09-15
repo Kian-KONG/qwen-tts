@@ -39,8 +39,12 @@ case "$KIND" in
     # convert to safetensors locally after downloading.
     MODEL_ID="hexgrad/Kokoro-82M-v1.1-zh"
     ;;
+  longcat)
+    DEST="$ROOT/models/longcat-audiodit"
+    MODEL_ID="mlx-community/LongCat-AudioDiT-3.5B-bf16"
+    ;;
   *)
-    echo "Usage: $0 [base|design|custom|asr|asr-0.6b|instruct|kokoro|kokoro-zh]"
+    echo "Usage: $0 [base|design|custom|asr|asr-0.6b|instruct|kokoro|kokoro-zh|longcat]"
     exit 1
     ;;
 esac

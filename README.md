@@ -2,9 +2,9 @@
 
 面向公司内部英文视频配音。在 **Mac Apple 芯片**（M 系列，本机已在 Mac mini M4 16GB 验证）上用 **Qwen3-TTS 1.7B bf16**（Apache 2.0）。支持三种音色：
 
-- **预设说话人**（CustomVoice）：点选 Ryan / Vivian 等 9 个官方音色，贴文字即可配
+- **预设说话人**（CustomVoice）：点选 Ryan / Vivian 等 9 个官方音色，贴文字即可配。配音页按语系分组，中文（Vivian / Serena / Uncle Fu / Dylan / Eric）是 **Qwen3-TTS 1.7B** 精品音色，和 Kokoro 轻量中文并列、不是同一套
 - **描述音色**（VoiceDesign）：写一段声音描述造音色
-- **声音克隆**（Base）：3–10 秒参考音频 + 逐字稿，保存在本机 `data/voices/` 可反复选用
+- **声音克隆**（LongCat-AudioDiT 3.5B）：3–10 秒参考音频 + 逐字稿，保存在本机 `data/voices/` 可反复选用；只用于克隆，生成时会卸掉 Qwen / Kokoro
 - **轻量英文**（Kokoro-82M）：Apache 2.0 英文旁白，和 Qwen3 并列切换，不能克隆
 - **轻量中文**（Kokoro-82M v1.1-zh）：103 个音色（100 中文 + Maple/Sol/Vale 3 个英文），中文音色可中英混读，不能克隆
 - **语音转文字**（Qwen3-ASR 1.7B）：上传音频生成文稿或克隆逐字稿
@@ -29,6 +29,7 @@ make download-asr
 make download-instruct
 make download-kokoro
 make download-kokoro-zh
+make download-longcat
 make start
 ```
 
@@ -41,13 +42,14 @@ make start
 | 命令 | 作用 |
 | --- | --- |
 | `make setup` | Apple Silicon 环境 |
-| `make download` | 拉 Base bf16（声音克隆） |
+| `make download` | 拉 Base bf16（Qwen 克隆检查点，界面克隆已改用 LongCat） |
 | `make download-design` | 拉 VoiceDesign bf16（描述音色） |
 | `make download-custom` | 拉 CustomVoice bf16（预设说话人） |
 | `make download-asr` | 拉 Qwen3-ASR 1.7B bf16（语音转文字） |
 | `make download-instruct` | 拉 Qwen3-1.7B bf16（实时翻译字幕） |
 | `make download-kokoro` | 拉 Kokoro-82M bf16（轻量英文配音） |
 | `make download-kokoro-zh` | 拉 Kokoro-82M v1.1-zh（100 个中文音色） |
+| `make download-longcat` | 拉 LongCat-AudioDiT 3.5B bf16（声音克隆） |
 | `make start` | 打包前端并由 FastAPI 提供 |
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |
@@ -99,6 +101,21 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 ```
 
 可选 `instruct` 只控制语气（如 `Very happy.`），不会改成另一种音色。
+
+预设说话人在配音页按语系分组：**中文（Qwen3-TTS 1.7B）** 是 Vivian / Serena / Uncle Fu / Dylan / Eric，和 Kokoro 的轻量中文分组并列、检查点不同。文稿语言切到英文时英文组置顶，切到中文时中文组置顶。
+
+## 声音克隆（LongCat-AudioDiT 3.5B）
+
+克隆不再走 Qwen Base。先 `make download-longcat`，在 Qwen3 页的「声音克隆」里录音或上传 3–10 秒参考音频 + 逐字稿。权重约 7GB bf16，16GB 机器上生成前会卸掉 Qwen / Kokoro / ASR。推理用 APG（`guidance_method=apg`，`steps=16`）。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/jobs \
+  -F "text=1. 你好，这是克隆试听。" \
+  -F "mode=clone" \
+  -F "ref_audio=@./ref.wav" \
+  -F "ref_text=参考音频的逐字稿" \
+  -F "language=Chinese"
+```
 
 ## 轻量配音（Kokoro）
 
@@ -217,8 +234,8 @@ curl -s -X POST http://127.0.0.1:8000/api/import-script \
 
 ## 准备参考音频
 
-1. 录 3–10 秒干净英文，尽量 44.1kHz / 24bit WAV
-2. 写好逐字稿，点「保存到音色库」。文件写在 `data/voices/<id>.wav` + `.txt`，下次在「声音克隆」里直接点选复用。
+1. 录 3–10 秒干净人声（中文或英文），尽量单人、少混响
+2. 写好逐字稿，点「保存到音色库」。文件写在 `data/voices/<id>.wav` + `.txt`，下次在「声音克隆」里直接点选，由 LongCat-AudioDiT 3.5B 合成
 
 麦克风示例：
 
@@ -235,7 +252,7 @@ ffmpeg -f avfoundation -i ":0" -t 8 -ar 44100 -c:a pcm_s24le data/voices/ref.wav
   --ref-text "transcript of reference audio"
 ```
 
-长文本会按句切分，`batch=4` 批量合成后再拼成 44.1kHz / 24bit WAV。
+长文本会按句切分，克隆由 LongCat 逐段合成后再拼成 44.1kHz / 24bit WAV。
 
 ## OpenAI 兼容 API
 
@@ -282,5 +299,5 @@ omlx serve --model-dir ~/.omlx/models --port 8001
 - 仅支持 Apple Silicon + MLX
 - 国内镜像下载走 ModelScope → hf-mirror；hf-mirror 不代理 HF 的 Xet 存储（会 401），`scripts/mirrors.sh` 已设 `HF_HUB_DISABLE_XET=1` 回落到普通 HTTP
 - 首次推理有 warmup，会偏慢；之后 RTF 大约 0.48，快于实时
-- 只使用 Base bf16，不要量化到 4bit
+- Qwen 预设 / 描述用 1.7B bf16，不要量化到 4bit；克隆用 LongCat-AudioDiT 3.5B bf16
 - 参考音频和文字稿必须对齐，否则克隆质量会掉

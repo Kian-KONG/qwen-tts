@@ -53,10 +53,13 @@ class ASREngine:
             raise FileNotFoundError("Qwen3-ASR model is missing. Run: make download-asr")
         from mlx_audio.stt.utils import load_model
         from .kokoro import kokoro_engine
+        from .longcat import longcat_engine
 
         engine.unload_unlocked()
         with kokoro_engine.lock:
             kokoro_engine.unload_unlocked()
+        with longcat_engine.lock:
+            longcat_engine.unload_unlocked()
         self.unload_unlocked()
         self.model_path = str(ASR_MODEL_DIR)
         self.model = load_model(self.model_path)

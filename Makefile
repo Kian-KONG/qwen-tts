@@ -10,18 +10,19 @@ export NPM_CONFIG_REGISTRY ?= https://registry.npmmirror.com
 export HF_ENDPOINT ?= https://hf-mirror.com
 export HF_MIRROR ?= https://hf-mirror.com
 
-.PHONY: help setup download download-design download-custom download-asr download-instruct download-kokoro download-kokoro-zh check-kokoro-zh start dev tunnel tunnel-named tunnel-quick tunnel-setup health
+.PHONY: help setup download download-design download-custom download-asr download-instruct download-kokoro download-kokoro-zh download-longcat check-kokoro-zh start dev tunnel tunnel-named tunnel-quick tunnel-setup health
 
 help:
 	@echo "Apple Silicon / MLX targets:"
 	@echo "  make setup         Install Python env, mlx-audio, ffmpeg"
-	@echo "  make download      Download Base bf16 (voice clone)"
+	@echo "  make download      Download Base bf16 (Qwen clone checkpoint)"
 	@echo "  make download-design Download VoiceDesign bf16 (described voice)"
 	@echo "  make download-custom Download CustomVoice bf16 (preset speakers)"
 	@echo "  make download-asr   Download Qwen3-ASR 1.7B bf16 (speech-to-text)"
 	@echo "  make download-instruct Download Qwen3-1.7B bf16 (live translate)"
 	@echo "  make download-kokoro Download Kokoro-82M bf16 (light English dub)"
 	@echo "  make download-kokoro-zh Download Kokoro-82M v1.1-zh (100 Chinese voices)"
+	@echo "  make download-longcat Download LongCat-AudioDiT 3.5B bf16 (voice clone)"
 	@echo "  make check-kokoro-zh Verify the Chinese Kokoro setup end to end"
 	@echo "  make start         Stop anything on :8000, build frontend, serve"
 	@echo "  make dev           Backend + Vite hot reload"
@@ -54,6 +55,9 @@ download-kokoro:
 
 download-kokoro-zh:
 	./scripts/download_model.sh kokoro-zh
+
+download-longcat:
+	./scripts/download_model.sh longcat
 
 check-kokoro-zh:
 	mlx-tts-env/bin/python scripts/check_kokoro_zh.py

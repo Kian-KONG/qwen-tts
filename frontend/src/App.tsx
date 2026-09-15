@@ -370,6 +370,8 @@ export default function App() {
 
   const filledSegments = useMemo(() => parseMarkdownList(markdown), [markdown]);
   const pendingClone = Boolean(!selectedVoiceIds.length && refFile && refText.trim());
+  const cloneSelected = selectedVoiceIds.length > 0 || pendingClone;
+  const longcatMissing = health?.longcat_model_ready === false;
   const canBlendKokoro = sameKokoroGender(selectedKokoro);
   const blendingKokoro = dubEngine === "kokoro" && kokoroBlend && canBlendKokoro;
   const kokoroFamilyById = useMemo(() => {
@@ -392,6 +394,33 @@ export default function App() {
     () => kokoroVoices.filter((item) => item.family === "zh"),
     [kokoroVoices],
   );
+  const qwenZhSpeakers = useMemo(
+    () => speakers.filter((item) => item.native === "Chinese"),
+    [speakers],
+  );
+  const qwenEnSpeakers = useMemo(
+    () => speakers.filter((item) => item.native === "English"),
+    [speakers],
+  );
+  const qwenOtherSpeakers = useMemo(
+    () => speakers.filter((item) => item.native !== "Chinese" && item.native !== "English"),
+    [speakers],
+  );
+  const qwenSpeakerGroups = useMemo(() => {
+    const groups: Array<{ key: "zh" | "en" | "other"; items: Speaker[] }> = [
+      { key: "zh", items: qwenZhSpeakers },
+      { key: "en", items: qwenEnSpeakers },
+      { key: "other", items: qwenOtherSpeakers },
+    ];
+    if (language === "English") {
+      return [
+        { key: "en" as const, items: qwenEnSpeakers },
+        { key: "zh" as const, items: qwenZhSpeakers },
+        { key: "other" as const, items: qwenOtherSpeakers },
+      ];
+    }
+    return groups;
+  }, [language, qwenEnSpeakers, qwenOtherSpeakers, qwenZhSpeakers]);
   // 100 Chinese voices is a lot of cards, so keep the audited samples up front
   // and reveal the rest on demand.
   const visibleKokoroZh = useMemo(
@@ -1470,6 +1499,8 @@ export default function App() {
         : dubEngine === "kokoro"
           ? (kokoroModel === "kokoro-zh" ? health?.kokoro_zh_model_id : health?.kokoro_model_id)?.split("/").pop() ||
             "Kokoro-82M"
+        : cloneSelected
+          ? health?.longcat_model_id?.split("/").pop() || "LongCat-AudioDiT-3.5B"
         : (
             health?.current_mode === "design"
               ? health?.design_model_id
@@ -1494,6 +1525,12 @@ export default function App() {
             : health?.kokoro_loaded
               ? t("status.kokoroLoaded")
               : t("status.kokoroReady")
+        : cloneSelected
+          ? longcatMissing
+            ? t("status.longcatMissing")
+            : health?.longcat_loaded
+              ? t("status.longcatLoaded")
+              : t("status.longcatReady")
         : `${health?.model_loaded ? t("status.loaded") : t("status.notLoaded")}${health?.custom_model_ready ? ` · ${t("status.presetReady")}` : ` · ${t("status.presetMissing")}`}${health?.design_model_ready ? ` · ${t("status.designReady")}` : ` · ${t("status.designMissing")}`}`;
 
   if (route === "captions") {
@@ -1552,7 +1589,23 @@ export default function App() {
             <ThemeGlyph theme={theme} />
           </button>
           <div className="status">
-            <span className={health?.model_loaded || health?.model_dir_ready ? "dot on" : "dot"} />
+            <span
+              className={
+                (
+                  route === "transcribe"
+                    ? Boolean(health?.asr_loaded || health?.asr_model_ready)
+                    : route === "translate"
+                      ? Boolean(health?.instruct_loaded || health?.instruct_model_ready)
+                      : dubEngine === "kokoro"
+                        ? !kokoroMissing
+                        : cloneSelected
+                          ? Boolean(health?.longcat_loaded || health?.longcat_model_ready)
+                          : health?.model_loaded || health?.model_dir_ready
+                )
+                  ? "dot on"
+                  : "dot"
+              }
+            />
             <div>
               <strong>{modelName}</strong>
               <p>{modelDetail}</p>
@@ -1877,24 +1930,41 @@ export default function App() {
               {t("voices.presetHint")}
               {health?.custom_model_ready ? "" : t("voices.customMissing")}
             </p>
-            <div className="speaker-grid">
-              {speakers.map((item) => (
-                <SpeakerCard
-                  key={item.id}
-                  kind="speakers"
-                  id={item.id}
-                  name={item.label}
-                  native={item.native}
-                  description={item.description}
-                  selected={selectedSpeakers.includes(item.id)}
-                  previewing={previewingSpeaker === item.id}
-                  playing={playingVoiceId === `preset:${item.id}`}
-                  previewDisabled={health?.custom_model_ready === false || previewingSpeaker !== null}
-                  onSelect={() => toggleSpeaker(item.id)}
-                  onPreview={() => void togglePlaySpeaker(item.id)}
-                />
-              ))}
-            </div>
+            {qwenSpeakerGroups.map((group) =>
+              group.items.length ? (
+                <div key={group.key}>
+                  <div className="speaker-group-head">
+                    <span className="speaker-group-title">
+                      {t(
+                        group.key === "zh"
+                          ? "voices.qwenGroupZh"
+                          : group.key === "en"
+                            ? "voices.qwenGroupEn"
+                            : "voices.qwenGroupOther",
+                      )}
+                    </span>
+                  </div>
+                  <div className="speaker-grid">
+                    {group.items.map((item) => (
+                      <SpeakerCard
+                        key={item.id}
+                        kind="speakers"
+                        id={item.id}
+                        name={item.label}
+                        native={item.native}
+                        description={item.description}
+                        selected={selectedSpeakers.includes(item.id)}
+                        previewing={previewingSpeaker === item.id}
+                        playing={playingVoiceId === `preset:${item.id}`}
+                        previewDisabled={health?.custom_model_ready === false || previewingSpeaker !== null}
+                        onSelect={() => toggleSpeaker(item.id)}
+                        onPreview={() => void togglePlaySpeaker(item.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null,
+            )}
             <label>
               {t("voices.styleOptional")}
               <input
@@ -1947,7 +2017,10 @@ export default function App() {
             open={voiceFold === "clone"}
             onToggle={() => setVoiceFold("clone")}
           >
-            <p className="hint">{t("voices.cloneHint")}</p>
+            <p className="hint">
+              {t("voices.cloneHint")}
+              {longcatMissing ? t("voices.cloneMissing") : ""}
+            </p>
             {voices.length ? (
               <div className="voice-list">
                 {voices.map((voice) => (
@@ -2179,7 +2252,7 @@ export default function App() {
                   (dubEngine === "kokoro" && kokoroMissing) ||
                   (dubEngine !== "kokoro" && selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
                   (dubEngine !== "kokoro" && designs.length > 0 && health?.design_model_ready === false) ||
-                  (dubEngine !== "kokoro" && (selectedVoiceIds.length > 0 || pendingClone) && health?.model_dir_ready === false)
+                  (dubEngine !== "kokoro" && cloneSelected && longcatMissing)
                 }
               >
                 {busy

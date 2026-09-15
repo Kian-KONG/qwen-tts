@@ -662,9 +662,12 @@ class KokoroEngine:
         from mlx_audio.tts.utils import load_model
         from .asr import asr_engine
         from .engine import engine
+        from .longcat import longcat_engine
         from .translate import instruct_engine
 
         engine.unload_unlocked()
+        with longcat_engine.lock:
+            longcat_engine.unload_unlocked()
         asr_engine.unload_unlocked()
         instruct_engine.unload_unlocked()
         self.unload_unlocked()

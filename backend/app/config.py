@@ -47,6 +47,13 @@ KOKORO_ZH_MODEL_DIR = Path(
     os.getenv("QWEN_KOKORO_ZH_MODEL", ROOT / "models" / "kokoro-zh")
 ).resolve()
 DEFAULT_KOKORO_ZH_VOICE = os.getenv("QWEN_KOKORO_ZH_VOICE", "zf_001")
+LONGCAT_MODEL_ID = os.getenv(
+    "QWEN_LONGCAT_MODEL_ID",
+    "mlx-community/LongCat-AudioDiT-3.5B-bf16",
+)
+LONGCAT_MODEL_DIR = Path(
+    os.getenv("QWEN_LONGCAT_MODEL", ROOT / "models" / "longcat-audiodit")
+).resolve()
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
 SCRIPTS_DIR = Path(os.getenv("QWEN_TTS_SCRIPTS", ROOT / "data" / "scripts")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
@@ -196,5 +203,6 @@ for path in (
     ASR_MODEL_DIR.parent,
     INSTRUCT_MODEL_DIR.parent,
     KOKORO_MODEL_DIR.parent,
+    LONGCAT_MODEL_DIR.parent,
 ):
     path.mkdir(parents=True, exist_ok=True)

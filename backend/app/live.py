@@ -39,10 +39,13 @@ class LiveTranslateSession:
         try:
             with engine.lock:
                 from .kokoro import kokoro_engine
+                from .longcat import longcat_engine
 
                 engine.unload_unlocked()
                 with kokoro_engine.lock:
                     kokoro_engine.unload_unlocked()
+                with longcat_engine.lock:
+                    longcat_engine.unload_unlocked()
                 with asr_engine.lock:
                     asr_engine._load_unlocked()
                 with instruct_engine.lock:

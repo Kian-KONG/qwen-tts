@@ -32,6 +32,7 @@ from .config import (
     LANGUAGE,
     LANGUAGES,
     LANGUAGE_BY_ID,
+    LONGCAT_MODEL_ID,
     MODEL_DIR,
     MODEL_ID,
     INSTRUCT_MODEL_DIR,
@@ -57,6 +58,7 @@ from .kokoro import (
     phonemize_text,
 )
 from .live import live_session, save_upload
+from .longcat import is_longcat_ready, longcat_engine
 from .modes import parse_mode
 from .paths import is_local_model_dir
 from .script_import import import_spreadsheet
@@ -201,6 +203,8 @@ def _assemble_job_voices(
 def _current_model_id() -> str:
     if kokoro_engine.loaded:
         return kokoro_model_id(kokoro_engine.model_key)
+    if longcat_engine.loaded:
+        return LONGCAT_MODEL_ID
     if engine.mode == "design":
         return DESIGN_MODEL_ID
     if engine.mode == "preset":
@@ -318,8 +322,17 @@ def health():
         "kokoro_loaded": kokoro_engine.loaded,
         "kokoro_zh_model_id": KOKORO_ZH_MODEL_ID,
         "kokoro_zh_model_ready": is_kokoro_zh_ready(),
+        "longcat_model_id": LONGCAT_MODEL_ID,
+        "longcat_model_ready": is_longcat_ready(),
+        "longcat_loaded": longcat_engine.loaded,
         "live_translate_active": live_session.active,
-        "current_mode": "kokoro" if kokoro_engine.loaded else engine.mode,
+        "current_mode": (
+            "kokoro"
+            if kokoro_engine.loaded
+            else "clone"
+            if longcat_engine.loaded
+            else engine.mode
+        ),
         "default_speaker": DEFAULT_SPEAKER,
         "batch_size": BATCH_SIZE,
         "languages": LANGUAGES,
@@ -925,16 +938,25 @@ def openai_speech(payload: SpeechRequest, authorization: Optional[str] = Header(
             ref_audio, ref_text = "", ""
         else:
             ref_audio, ref_text = _resolve_clone(payload.voice, payload.ref_audio, payload.ref_text)
-        stats = engine.synthesize(
-            payload.input,
-            ref_audio,
-            ref_text,
-            batch_size=payload.batch_size,
-            language=_normalize_language(payload.language),
-            mode=job_mode,
-            instruct=description,
-            speaker=speaker_id,
-        )
+        if job_mode == "clone":
+            stats = longcat_engine.synthesize(
+                payload.input,
+                ref_audio,
+                ref_text,
+                batch_size=payload.batch_size,
+                language=_normalize_language(payload.language),
+            )
+        else:
+            stats = engine.synthesize(
+                payload.input,
+                ref_audio,
+                ref_text,
+                batch_size=payload.batch_size,
+                language=_normalize_language(payload.language),
+                mode=job_mode,
+                instruct=description,
+                speaker=speaker_id,
+            )
         from .audio_util import convert_format
 
         body, media_type = convert_format(Path(stats["output_path"]), payload.response_format)
@@ -966,13 +988,12 @@ async def openai_clone(
         tmp.write(await ref_audio.read())
         tmp_path = Path(tmp.name)
     try:
-        stats = engine.synthesize(
+        stats = longcat_engine.synthesize(
             input,
             str(tmp_path),
             ref_text,
             batch_size=batch_size,
             language=_normalize_language(language),
-            mode="clone",
         )
         from .audio_util import convert_format
 

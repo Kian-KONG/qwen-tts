@@ -113,6 +113,9 @@ export type Health = {
   kokoro_loaded?: boolean;
   kokoro_zh_model_id?: string;
   kokoro_zh_model_ready?: boolean;
+  longcat_model_id?: string;
+  longcat_model_ready?: boolean;
+  longcat_loaded?: boolean;
   live_translate_active?: boolean;
   current_mode?: "clone" | "design" | "preset" | string;
   default_speaker?: string;

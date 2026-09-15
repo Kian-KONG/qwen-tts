@@ -5,11 +5,11 @@ from pathlib import Path
 
 from .chunking import split_script
 from .config import BATCH_SIZE, LANGUAGE
-from .engine import engine
+from .longcat import longcat_engine
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate English dubbing with Qwen3-TTS")
+    parser = argparse.ArgumentParser(description="Generate cloned speech with LongCat-AudioDiT")
     parser.add_argument("--text", help="Text to speak")
     parser.add_argument("--text-file", type=Path, help="UTF-8 script file")
     parser.add_argument("--ref-audio", required=True, type=Path)
@@ -41,7 +41,7 @@ def main() -> None:
             print(f"[{i}] {chunk}")
         return
 
-    stats = engine.synthesize(
+    stats = longcat_engine.synthesize(
         text,
         str(args.ref_audio),
         ref_text,
