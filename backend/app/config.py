@@ -40,6 +40,13 @@ INSTRUCT_MODEL_DIR = Path(
 KOKORO_MODEL_ID = os.getenv("QWEN_KOKORO_MODEL_ID", "mlx-community/Kokoro-82M-bf16")
 KOKORO_MODEL_DIR = Path(os.getenv("QWEN_KOKORO_MODEL", ROOT / "models" / "kokoro")).resolve()
 DEFAULT_KOKORO_VOICE = os.getenv("QWEN_KOKORO_VOICE", "af_heart")
+# Kokoro v1.1-zh is a separate checkpoint with its own vocabulary (Zhuyin tokens),
+# so it lives beside the English model instead of replacing it.
+KOKORO_ZH_MODEL_ID = os.getenv("QWEN_KOKORO_ZH_MODEL_ID", "hexgrad/Kokoro-82M-v1.1-zh")
+KOKORO_ZH_MODEL_DIR = Path(
+    os.getenv("QWEN_KOKORO_ZH_MODEL", ROOT / "models" / "kokoro-zh")
+).resolve()
+DEFAULT_KOKORO_ZH_VOICE = os.getenv("QWEN_KOKORO_ZH_VOICE", "zf_001")
 VOICES_DIR = Path(os.getenv("QWEN_TTS_VOICES", ROOT / "data" / "voices")).resolve()
 SCRIPTS_DIR = Path(os.getenv("QWEN_TTS_SCRIPTS", ROOT / "data" / "scripts")).resolve()
 OUTPUT_DIR = Path(os.getenv("QWEN_TTS_OUTPUT", ROOT / "data" / "output")).resolve()
@@ -98,25 +105,79 @@ SPEAKERS = [
 ]
 SPEAKER_BY_ID = {item["id"]: item for item in SPEAKERS}
 KOKORO_VOICES = [
-    {"id": "af_heart", "label": "Heart", "native": "US", "description": "默认女声，适合旁白"},
-    {"id": "af_bella", "label": "Bella", "native": "US", "description": "清晰美式女声"},
-    {"id": "af_nicole", "label": "Nicole", "native": "US", "description": "沉稳美式女声"},
-    {"id": "af_sarah", "label": "Sarah", "native": "US", "description": "柔和美式女声"},
-    {"id": "af_sky", "label": "Sky", "native": "US", "description": "年轻美式女声"},
-    {"id": "af_aoede", "label": "Aoede", "native": "US", "description": "明亮美式女声"},
-    {"id": "am_adam", "label": "Adam", "native": "US", "description": "沉稳美式男声"},
-    {"id": "am_michael", "label": "Michael", "native": "US", "description": "标准美式男声"},
-    {"id": "am_eric", "label": "Eric", "native": "US", "description": "自然美式男声"},
-    {"id": "am_liam", "label": "Liam", "native": "US", "description": "年轻美式男声"},
-    {"id": "am_puck", "label": "Puck", "native": "US", "description": "轻快美式男声"},
-    {"id": "bf_emma", "label": "Emma", "native": "UK", "description": "清晰英式女声"},
-    {"id": "bf_isabella", "label": "Isabella", "native": "UK", "description": "柔和英式女声"},
-    {"id": "bf_alice", "label": "Alice", "native": "UK", "description": "利落英式女声"},
-    {"id": "bm_george", "label": "George", "native": "UK", "description": "沉稳英式男声"},
-    {"id": "bm_daniel", "label": "Daniel", "native": "UK", "description": "标准英式男声"},
-    {"id": "bm_lewis", "label": "Lewis", "native": "UK", "description": "自然英式男声"},
+    {"id": "af_heart", "label": "Heart", "native": "US", "description": "默认女声，适合旁白", "family": "en"},
+    {"id": "af_bella", "label": "Bella", "native": "US", "description": "清晰美式女声", "family": "en"},
+    {"id": "af_nicole", "label": "Nicole", "native": "US", "description": "沉稳美式女声", "family": "en"},
+    {"id": "af_sarah", "label": "Sarah", "native": "US", "description": "柔和美式女声", "family": "en"},
+    {"id": "af_sky", "label": "Sky", "native": "US", "description": "年轻美式女声", "family": "en"},
+    {"id": "af_aoede", "label": "Aoede", "native": "US", "description": "明亮美式女声", "family": "en"},
+    {"id": "am_adam", "label": "Adam", "native": "US", "description": "沉稳美式男声", "family": "en"},
+    {"id": "am_michael", "label": "Michael", "native": "US", "description": "标准美式男声", "family": "en"},
+    {"id": "am_eric", "label": "Eric", "native": "US", "description": "自然美式男声", "family": "en"},
+    {"id": "am_liam", "label": "Liam", "native": "US", "description": "年轻美式男声", "family": "en"},
+    {"id": "am_puck", "label": "Puck", "native": "US", "description": "轻快美式男声", "family": "en"},
+    {"id": "bf_emma", "label": "Emma", "native": "UK", "description": "清晰英式女声", "family": "en"},
+    {"id": "bf_isabella", "label": "Isabella", "native": "UK", "description": "柔和英式女声", "family": "en"},
+    {"id": "bf_alice", "label": "Alice", "native": "UK", "description": "利落英式女声", "family": "en"},
+    {"id": "bm_george", "label": "George", "native": "UK", "description": "沉稳英式男声", "family": "en"},
+    {"id": "bm_daniel", "label": "Daniel", "native": "UK", "description": "标准英式男声", "family": "en"},
+    {"id": "bm_lewis", "label": "Lewis", "native": "UK", "description": "自然英式男声", "family": "en"},
 ]
-KOKORO_VOICE_BY_ID = {item["id"]: item for item in KOKORO_VOICES}
+
+# Kokoro-82M-v1.1-zh ships 100 Chinese voices in one checkpoint (plus 3 English
+# ones trained in the same run). Ids are upstream; the number carries no meaning,
+# so the label shows gender + number and users audition with the preview button.
+_KOKORO_ZH_FEMALE = (
+    "001 002 003 004 005 006 007 008 017 018 019 021 022 023 024 026 027 028 "
+    "032 036 038 039 040 042 043 044 046 047 048 049 051 059 060 067 070 071 "
+    "072 073 074 075 076 077 078 079 083 084 085 086 087 088 090 092 093 094 099"
+).split()
+_KOKORO_ZH_MALE = (
+    "009 010 011 012 013 014 015 016 020 025 029 030 031 033 034 035 037 041 "
+    "045 050 052 053 054 055 056 057 058 061 062 063 064 065 066 068 069 080 "
+    "081 082 089 091 095 096 097 098 100"
+).split()
+# Voices used by the upstream v1.1-zh samples, surfaced first in the UI.
+KOKORO_ZH_HIGHLIGHT = {"zf_001", "zm_010"}
+
+KOKORO_ZH_VOICES = [
+    {
+        "id": f"zf_{number}",
+        "label": f"女声 {number}",
+        "native": "CN",
+        "description": "中文女声，官方示例音色" if f"zf_{number}" in KOKORO_ZH_HIGHLIGHT else "",
+        "family": "zh",
+        "recommended": f"zf_{number}" in KOKORO_ZH_HIGHLIGHT,
+    }
+    for number in _KOKORO_ZH_FEMALE
+] + [
+    {
+        "id": f"zm_{number}",
+        "label": f"男声 {number}",
+        "native": "CN",
+        "description": "中文男声，官方示例音色" if f"zm_{number}" in KOKORO_ZH_HIGHLIGHT else "",
+        "family": "zh",
+        "recommended": f"zm_{number}" in KOKORO_ZH_HIGHLIGHT,
+    }
+    for number in _KOKORO_ZH_MALE
+] + [
+    # English voices trained in the v1.1-zh run. `family` is the *language* (they
+    # read English and belong in the English group); `model` is the *checkpoint*
+    # they were trained with, which is v1.1-zh and not interchangeable with v1.0.
+    {"id": "af_maple", "label": "Maple", "native": "US", "description": "美式女声，v1.1-zh 自带", "family": "en", "model": "kokoro-zh"},
+    {"id": "af_sol", "label": "Sol", "native": "US", "description": "美式女声，v1.1-zh 自带", "family": "en", "model": "kokoro-zh"},
+    {"id": "bf_vale", "label": "Vale", "native": "UK", "description": "英式女声，v1.1-zh 自带", "family": "en", "model": "kokoro-zh"},
+]
+
+# Every voice records which checkpoint its style vector was trained with, so the
+# loader can pick the right weights even when the language and the checkpoint
+# disagree (the 3 English voices above).
+for _voice in KOKORO_VOICES:
+    _voice.setdefault("model", "kokoro")
+for _voice in KOKORO_ZH_VOICES:
+    _voice.setdefault("model", "kokoro-zh")
+
+KOKORO_VOICE_BY_ID = {item["id"]: item for item in KOKORO_VOICES + KOKORO_ZH_VOICES}
 SPEAKER_PREVIEW = {
     "English": ("Hello, this is a preview of my voice.", "English"),
     "Chinese": ("你好，这是我的声音试听。", "Chinese"),

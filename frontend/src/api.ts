@@ -81,6 +81,15 @@ export type Speaker = {
   label: string;
   native: string;
   description?: string;
+  /** The language these voices read. Drives the panel grouping. */
+  family?: "en" | "zh";
+  /**
+   * The checkpoint holding this voice's style vector. Matches `family` except for
+   * Maple/Sol/Vale, English voices trained inside the v1.1-zh run.
+   */
+  model?: "kokoro" | "kokoro-zh";
+  /** Surfaced first in the panel (upstream sample voices). */
+  recommended?: boolean;
 };
 
 export type Health = {
@@ -102,6 +111,8 @@ export type Health = {
   kokoro_model_id?: string;
   kokoro_model_ready?: boolean;
   kokoro_loaded?: boolean;
+  kokoro_zh_model_id?: string;
+  kokoro_zh_model_ready?: boolean;
   live_translate_active?: boolean;
   current_mode?: "clone" | "design" | "preset" | string;
   default_speaker?: string;
@@ -300,10 +311,32 @@ export async function listSpeakers(): Promise<{ data: Speaker[]; default: string
   return { data: data.data ?? [], default: data.default ?? "Ryan" };
 }
 
-export async function listKokoroVoices(): Promise<{ data: Speaker[]; default: string; ready?: boolean }> {
+export type KokoroVoiceList = {
+  data: Speaker[];
+  default: string;
+  defaultZh?: string;
+  ready?: boolean;
+  readyZh?: boolean;
+  readyByFamily?: Record<string, boolean>;
+  /**
+   * Readiness keyed by checkpoint. Preferred over `readyByFamily` because a voice
+   * can belong to either checkpoint regardless of the language it speaks.
+   */
+  readyByModel?: Record<string, boolean>;
+};
+
+export async function listKokoroVoices(): Promise<KokoroVoiceList> {
   const res = await request("/api/kokoro/voices");
   const data = await res.json();
-  return { data: data.data ?? [], default: data.default ?? "af_heart", ready: data.ready };
+  return {
+    data: data.data ?? [],
+    default: data.default ?? "af_heart",
+    defaultZh: data.default_zh,
+    ready: data.ready,
+    readyZh: data.ready_zh,
+    readyByFamily: data.ready_by_family,
+    readyByModel: data.ready_by_model,
+  };
 }
 
 export async function fetchKokoroPreview(ids: string | string[], weights?: number[]): Promise<string> {
@@ -330,16 +363,21 @@ export type KokoroPhonemeSegment = {
 
 export type KokoroPhonemes = {
   british: boolean;
+  family?: string;
   phonemes: string;
   annotated: string;
   segments: KokoroPhonemeSegment[];
 };
 
-export async function previewKokoroPhonemes(text: string, british = false): Promise<KokoroPhonemes> {
+export async function previewKokoroPhonemes(
+  text: string,
+  british = false,
+  family: "en" | "zh" = "en",
+): Promise<KokoroPhonemes> {
   const res = await request("/api/kokoro/phonemes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, british }),
+    body: JSON.stringify({ text, british, family }),
   });
   return res.json();
 }

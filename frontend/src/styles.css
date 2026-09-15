@@ -1018,6 +1018,21 @@ label {
   gap: 8px;
 }
 
+/* Kokoro ships two checkpoints, so the panel groups voices by language. */
+.speaker-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0 6px;
+}
+
+.speaker-group-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .speaker-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -34,6 +34,7 @@ import {
   type KokoroPhonemes,
   type Language,
   type ScriptList,
+  type KokoroVoiceList,
   type Speaker,
   type Transcript,
   type Voice,
@@ -53,7 +54,8 @@ import { PhonemeEditor } from "./components/PhonemeEditor";
 import { ScriptLists, type ScriptPending } from "./components/ScriptLists";
 import { SpeakerCard } from "./components/SpeakerCard";
 import { FoldSection } from "./components/FoldSection";
-import { blendWeightsQuery, kokoroWeight, normalizedBlendPercents, pruneKokoroWeights, sameKokoroGender } from "./lib/kokoroBlend";
+import { blendWeightsQuery, kokoroFamilyOf, kokoroModelOf, kokoroWeight, normalizedBlendPercents, pruneKokoroWeights, sameKokoroGender, type KokoroFamily } from "./lib/kokoroBlend";
+
 import { jobNeedsZip, jobVoiceTracks, jobZipName, jobZipUrl, wavName } from "./lib/jobUtils";
 import { displayJobTitle, displayScriptName, isDefaultClonePrompt, isDefaultScript, languageLabel, t, useI18n } from "./i18n";
 import { useHashRoute } from "./route";
@@ -286,6 +288,8 @@ export default function App() {
     stored(ENGINE_KEY, "qwen") === "kokoro" ? "kokoro" : "qwen",
   );
   const [kokoroVoices, setKokoroVoices] = useState<Speaker[]>([]);
+  const [kokoroReadyByModel, setKokoroReadyByModel] = useState<Record<string, boolean>>({});
+  const [showAllKokoroZh, setShowAllKokoroZh] = useState(false);
   const [selectedKokoro, setSelectedKokoro] = useState<string[]>(() => storedList(KOKORO_VOICES_KEY, ["af_heart"]));
   const [kokoroBlend, setKokoroBlend] = useState(() => stored(KOKORO_BLEND_KEY, "0") === "1");
   const [kokoroWeights, setKokoroWeights] = useState<Record<string, number>>(() => {
@@ -368,6 +372,51 @@ export default function App() {
   const pendingClone = Boolean(!selectedVoiceIds.length && refFile && refText.trim());
   const canBlendKokoro = sameKokoroGender(selectedKokoro);
   const blendingKokoro = dubEngine === "kokoro" && kokoroBlend && canBlendKokoro;
+  const kokoroFamilyById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const item of kokoroVoices) map[item.id] = item.family || "en";
+    return map;
+  }, [kokoroVoices]);
+  // Maple/Sol/Vale read English but live in the v1.1-zh checkpoint, so the
+  // checkpoint a voice belongs to is tracked separately from its language.
+  const kokoroModelById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const item of kokoroVoices) map[item.id] = item.model || "kokoro";
+    return map;
+  }, [kokoroVoices]);
+  const kokoroEnVoices = useMemo(
+    () => kokoroVoices.filter((item) => (item.family || "en") === "en"),
+    [kokoroVoices],
+  );
+  const kokoroZhVoices = useMemo(
+    () => kokoroVoices.filter((item) => item.family === "zh"),
+    [kokoroVoices],
+  );
+  // 100 Chinese voices is a lot of cards, so keep the audited samples up front
+  // and reveal the rest on demand.
+  const visibleKokoroZh = useMemo(
+    () =>
+      showAllKokoroZh
+        ? kokoroZhVoices
+        : kokoroZhVoices.filter((item) => item.recommended || selectedKokoro.includes(item.id)),
+    [kokoroZhVoices, selectedKokoro, showAllKokoroZh],
+  );
+  const kokoroFamily: KokoroFamily = kokoroFamilyOf(selectedKokoro[0] || "af_heart", kokoroFamilyById);
+  const kokoroModel = kokoroModelOf(selectedKokoro[0] || "af_heart", kokoroModelById);
+  const kokoroReadyFromVoiceList = kokoroReadyByModel[kokoroModel];
+  const kokoroReadyFromHealth =
+    kokoroModel === "kokoro-zh" ? health?.kokoro_zh_model_ready : health?.kokoro_model_ready;
+  const kokoroMissing = (kokoroReadyFromVoiceList ?? kokoroReadyFromHealth) === false;
+  // Readiness is a property of the card's own checkpoint, not of the group it is
+  // listed under: Maple/Sol/Vale sit in the English group but ship with v1.1-zh,
+  // so a group-level flag would leave them clickable with only v1.0 installed.
+  const kokoroMissingFor = (id: string) => {
+    const model = kokoroModelOf(id, kokoroModelById);
+    const ready =
+      kokoroReadyByModel[model] ??
+      (model === "kokoro-zh" ? health?.kokoro_zh_model_ready : health?.kokoro_model_ready);
+    return ready === false;
+  };
   const roster = useMemo(() => {
     if (dubEngine === "kokoro") {
       if (blendingKokoro) {
@@ -436,7 +485,9 @@ export default function App() {
         listVoices(),
         listLanguages(),
         listSpeakers(),
-        listKokoroVoices().catch(() => ({ data: [] as Speaker[], default: "af_heart" })),
+        listKokoroVoices().catch(
+          (): KokoroVoiceList => ({ data: [] as Speaker[], default: "af_heart" }),
+        ),
         listScripts().catch(() => null),
       ]);
       setHealth(nextHealth);
@@ -444,6 +495,12 @@ export default function App() {
       setLanguages(nextLanguages);
       setSpeakers(nextSpeakers.data);
       setKokoroVoices(nextKokoro.data);
+      const readyByModel =
+        nextKokoro.readyByModel ?? {
+          kokoro: nextKokoro.readyByFamily?.en ?? nextKokoro.ready ?? false,
+          "kokoro-zh": nextKokoro.readyByFamily?.zh ?? nextKokoro.readyZh ?? false,
+        };
+      setKokoroReadyByModel(readyByModel);
       if (nextScripts) {
         setScripts(nextScripts);
         setActiveScriptId((current) => (current && nextScripts.some((item) => item.id === current) ? current : ""));
@@ -452,7 +509,14 @@ export default function App() {
       setSelectedSpeakers((current) => current.filter((id) => nextSpeakers.data.some((item) => item.id === id)));
       setSelectedKokoro((current) => {
         const next = current.filter((id) => nextKokoro.data.some((item) => item.id === id));
-        return next.length ? next : nextKokoro.data[0] ? [nextKokoro.data[0].id] : current;
+        if (next.length) return next;
+        const pick = (id?: string) => nextKokoro.data.find((item) => item.id === id);
+        const modelReady = (voice: Speaker) => readyByModel[voice.model || "kokoro"] !== false;
+        const preferred = pick(nextKokoro.default);
+        if (preferred && modelReady(preferred)) return [preferred.id];
+        const zhDefault = pick(nextKokoro.defaultZh);
+        if (zhDefault) return [zhDefault.id];
+        return nextKokoro.data[0] ? [nextKokoro.data[0].id] : current;
       });
       setSelectedVoiceIds((current) => current.filter((id) => nextVoices.some((item) => item.id === id)));
       setVoiceId((current) => {
@@ -531,6 +595,13 @@ export default function App() {
       setKokoroBlend(false);
     }
   }, [selectedKokoro, kokoroBlend]);
+
+  // The Kokoro family picked by the voice determines the spoken language, so the
+  // language selector follows it rather than the other way around.
+  useEffect(() => {
+    if (dubEngine !== "kokoro") return;
+    setLanguage(kokoroFamily === "zh" ? "Chinese" : "English");
+  }, [dubEngine, kokoroFamily]);
 
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "error" || job.status === "cancelled") return;
@@ -653,7 +724,7 @@ export default function App() {
     setMarkdown(item.markdown || "");
     setActiveScriptId(item.id);
     setScriptName(item.name);
-    if (item.language) setLanguage(item.language);
+    if (item.language && dubEngine !== "kokoro") setLanguage(item.language);
     setExcelName("");
     setEditorRev((n) => n + 1);
   }
@@ -995,7 +1066,7 @@ export default function App() {
               temperature,
               verifyAsr: false,
               batchSize,
-              language: "English",
+              language: kokoroFamily === "zh" ? "Chinese" : "English",
               scriptName: scriptName.trim() || t("script.fallbackName"),
             })
           : await createJob({
@@ -1059,7 +1130,17 @@ export default function App() {
 
   function toggleKokoro(id: string) {
     setSelectedKokoro((current) => {
-      const next = toggleId(current, id, true);
+      // One job renders on one checkpoint, so picking a voice from another family
+      // (or another checkpoint, e.g. Maple vs. Heart) swaps the selection rather
+      // than mixing them — the backend rejects mixtures outright.
+      const family = kokoroFamilyOf(id, kokoroFamilyById);
+      const model = kokoroModelOf(id, kokoroModelById);
+      const kept = current.filter(
+        (item) =>
+          kokoroFamilyOf(item, kokoroFamilyById) === family &&
+          kokoroModelOf(item, kokoroModelById) === model,
+      );
+      const next = toggleId(kept, id, true);
       if (kokoroBlend && next.length >= 2 && !sameKokoroGender(next)) setKokoroBlend(false);
       return next;
     });
@@ -1068,8 +1149,11 @@ export default function App() {
   function pickEngine(next: "qwen" | "kokoro") {
     setDubEngine(next);
     setCloneStudioOpen(false);
-    if (next === "kokoro") setLanguage("English");
-    else setPhonemePreview(null);
+    if (next === "kokoro") {
+      setLanguage(kokoroFamily === "zh" ? "Chinese" : "English");
+    } else {
+      setPhonemePreview(null);
+    }
   }
 
   async function onKokoroPhonemes() {
@@ -1082,7 +1166,7 @@ export default function App() {
     setMessage("");
     try {
       const british = Boolean(selectedKokoro[0]?.startsWith("b"));
-      setPhonemePreview(await previewKokoroPhonemes(text, british));
+      setPhonemePreview(await previewKokoroPhonemes(text, british, kokoroFamily));
     } catch (error) {
       setPhonemePreview(null);
       setMessage(error instanceof Error ? error.message : t("msg.phonemeFail"));
@@ -1099,11 +1183,27 @@ export default function App() {
     setMessage(t("msg.phonemeApplied"));
   }
 
+  const phonemeToolsAvailable = dubEngine === "kokoro" && kokoroFamily === "en";
+
   function onLanguageChange(next: string) {
     setLanguage(next);
-    if (dubEngine === "kokoro" && next !== "English") {
-      pickEngine("qwen");
+    if (dubEngine !== "kokoro") return;
+    if (next === "English" || next === "Chinese") {
+      const want: KokoroFamily = next === "Chinese" ? "zh" : "en";
+      setSelectedKokoro((current) => {
+        if (current.some((id) => kokoroFamilyOf(id, kokoroFamilyById) === want)) return current;
+        const pool = kokoroVoices.filter((item) => (item.family || "en") === want);
+        // Prefer an audited voice, then one on the family's own checkpoint rather
+        // than the English voices that ship inside the v1.1-zh run.
+        const fallback =
+          pool.find((item) => item.recommended) ||
+          pool.find((item) => (item.model || "kokoro") === (want === "zh" ? "kokoro-zh" : "kokoro")) ||
+          pool[0];
+        return fallback ? [fallback.id] : current;
+      });
+      return;
     }
+    pickEngine("qwen");
   }
 
   function toggleCloneVoice(id: string) {
@@ -1368,7 +1468,8 @@ export default function App() {
       : route === "translate"
         ? health?.instruct_model_id?.split("/").pop() || "Qwen3-1.7B"
         : dubEngine === "kokoro"
-          ? health?.kokoro_model_id?.split("/").pop() || "Kokoro-82M"
+          ? (kokoroModel === "kokoro-zh" ? health?.kokoro_zh_model_id : health?.kokoro_model_id)?.split("/").pop() ||
+            "Kokoro-82M"
         : (
             health?.current_mode === "design"
               ? health?.design_model_id
@@ -1388,11 +1489,11 @@ export default function App() {
             health?.instruct_loaded ? t("status.translateLoaded") : health?.instruct_model_ready ? t("status.translateReady") : t("status.translateMissing")
           }`
         : dubEngine === "kokoro"
-          ? health?.kokoro_loaded
-            ? t("status.kokoroLoaded")
-            : health?.kokoro_model_ready
-              ? t("status.kokoroReady")
-              : t("status.kokoroMissing")
+          ? kokoroMissing
+            ? t("status.kokoroMissing")
+            : health?.kokoro_loaded
+              ? t("status.kokoroLoaded")
+              : t("status.kokoroReady")
         : `${health?.model_loaded ? t("status.loaded") : t("status.notLoaded")}${health?.custom_model_ready ? ` · ${t("status.presetReady")}` : ` · ${t("status.presetMissing")}`}${health?.design_model_ready ? ` · ${t("status.designReady")}` : ` · ${t("status.designMissing")}`}`;
 
   if (route === "captions") {
@@ -1660,7 +1761,7 @@ export default function App() {
           >
             <p className="hint">
               {t("voices.kokoroHint")}
-              {health?.kokoro_model_ready ? "" : t("voices.kokoroMissing")}
+              {kokoroMissing ? t(kokoroModel === "kokoro-zh" ? "voices.kokoroZhMissing" : "voices.kokoroMissing") : ""}
               {selectedKokoro.length >= 2 && !sameKokoroGender(selectedKokoro)
                 ? t("voices.kokoroMixed")
                 : ""}
@@ -1687,9 +1788,7 @@ export default function App() {
               <button
                 type="button"
                 className="ghost mini"
-                disabled={
-                  !blendingKokoro || health?.kokoro_model_ready === false || previewingSpeaker !== null
-                }
+                disabled={!blendingKokoro || kokoroMissing || previewingSpeaker !== null}
                 onClick={() => void togglePlayKokoro(selectedKokoro)}
               >
                 {previewingSpeaker === "blend"
@@ -1710,8 +1809,11 @@ export default function App() {
                 onWeight={(id, value) => setKokoroWeights((current) => ({ ...current, [id]: value }))}
               />
             ) : null}
+            <div className="speaker-group-head">
+              <span className="speaker-group-title">{t("voices.kokoroGroupEn")}</span>
+            </div>
             <div className="speaker-grid">
-              {kokoroVoices.map((item) => (
+              {kokoroEnVoices.map((item) => (
                 <SpeakerCard
                   key={item.id}
                   kind="kokoro"
@@ -1722,12 +1824,46 @@ export default function App() {
                   selected={selectedKokoro.includes(item.id)}
                   previewing={previewingSpeaker === item.id}
                   playing={playingVoiceId === `kokoro:${item.id}`}
-                  previewDisabled={health?.kokoro_model_ready === false || previewingSpeaker !== null}
+                  previewDisabled={kokoroMissingFor(item.id) || previewingSpeaker !== null}
                   onSelect={() => toggleKokoro(item.id)}
                   onPreview={() => void togglePlayKokoro(item.id)}
                 />
               ))}
             </div>
+            {kokoroZhVoices.length ? (
+              <>
+                <div className="speaker-group-head">
+                  <span className="speaker-group-title">{t("voices.kokoroGroupZh")}</span>
+                  <button
+                    type="button"
+                    className="ghost mini"
+                    onClick={() => setShowAllKokoroZh((current) => !current)}
+                  >
+                    {showAllKokoroZh
+                      ? t("voices.kokoroZhCollapse")
+                      : t("voices.kokoroZhExpand", { n: kokoroZhVoices.length })}
+                  </button>
+                </div>
+                <div className="speaker-grid">
+                  {visibleKokoroZh.map((item) => (
+                    <SpeakerCard
+                      key={item.id}
+                      kind="kokoro"
+                      id={item.id}
+                      name={item.label}
+                      native={item.native}
+                      description={item.description}
+                      selected={selectedKokoro.includes(item.id)}
+                      previewing={previewingSpeaker === item.id}
+                      playing={playingVoiceId === `kokoro:${item.id}`}
+                      previewDisabled={kokoroMissingFor(item.id) || previewingSpeaker !== null}
+                      onSelect={() => toggleKokoro(item.id)}
+                      onPreview={() => void togglePlayKokoro(item.id)}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : null}
           </FoldSection>
           ) : (
           <>
@@ -1898,11 +2034,13 @@ export default function App() {
                   value={language}
                   onChange={(e) => onLanguageChange(e.target.value)}
                 >
-                  {languages.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {languageLabel(item.id, item.label)}
-                    </option>
-                  ))}
+                  {languages
+                    .filter((item) => dubEngine !== "kokoro" || item.id === "English" || item.id === "Chinese")
+                    .map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {languageLabel(item.id, item.label)}
+                      </option>
+                    ))}
                 </select>
               </label>
               <label>
@@ -1950,7 +2088,7 @@ export default function App() {
             </div>
             <p className="hint hint-compact">
               {dubEngine === "kokoro"
-                ? t("script.hintKokoro")
+                ? t(kokoroFamily === "zh" ? "script.hintKokoroZh" : "script.hintKokoro")
                 : verifyAsr
                 ? t("script.hintAsr")
                 : stableDub
@@ -1986,7 +2124,7 @@ export default function App() {
               <button type="button" className="ghost" onClick={tidyNumbers}>
                 {t("script.tidy")}
               </button>
-              {dubEngine === "kokoro" ? (
+              {phonemeToolsAvailable ? (
                 <button type="button" className="ghost" disabled={phonemeBusy || !markdown.trim()} onClick={() => void onKokoroPhonemes()}>
                   {phonemeBusy ? t("script.phonemeBusy") : t("script.phoneme")}
                 </button>
@@ -2000,7 +2138,7 @@ export default function App() {
               />
               <span>{t("common.segments", { n: filledSegments.length })}</span>
             </div>
-            {dubEngine === "kokoro" && phonemePreview ? (
+            {phonemeToolsAvailable && phonemePreview ? (
               <PhonemeEditor data={phonemePreview} onApply={applyKokoroAnnotated} />
             ) : null}
             <FoldSection
@@ -2038,7 +2176,7 @@ export default function App() {
                   busy ||
                   filledSegments.length === 0 ||
                   voiceCount === 0 ||
-                  (dubEngine === "kokoro" && health?.kokoro_model_ready === false) ||
+                  (dubEngine === "kokoro" && kokoroMissing) ||
                   (dubEngine !== "kokoro" && selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
                   (dubEngine !== "kokoro" && designs.length > 0 && health?.design_model_ready === false) ||
                   (dubEngine !== "kokoro" && (selectedVoiceIds.length > 0 || pendingClone) && health?.model_dir_ready === false)

@@ -13,14 +13,35 @@ import numpy as np
 from . import audio_util, chunking
 from .config import (
     DEFAULT_KOKORO_VOICE,
+    DEFAULT_KOKORO_ZH_VOICE,
     GAP_MS,
     KOKORO_MODEL_DIR,
     KOKORO_MODEL_ID,
     KOKORO_VOICE_BY_ID,
+    KOKORO_ZH_MODEL_DIR,
+    KOKORO_ZH_MODEL_ID,
     OUTPUT_DIR,
     PREVIEW_DIR,
 )
 from .paths import is_local_model_dir
+
+FAMILY_EN = "en"
+FAMILY_ZH = "zh"
+# Two axes that usually agree but must not be conflated:
+#   * `family`  — the language a voice reads (drives G2P, chunking, UI grouping)
+#   * `model`   — the checkpoint its style vector was trained with (drives weights)
+# They diverge for af_maple / af_sol / bf_vale: English voices shipped inside the
+# v1.1-zh checkpoint, which must run through English G2P on v1.1-zh weights.
+MODEL_EN = "kokoro"
+MODEL_ZH = "kokoro-zh"
+MODEL_ID_BY_MODEL = {MODEL_EN: KOKORO_MODEL_ID, MODEL_ZH: KOKORO_ZH_MODEL_ID}
+MODEL_DIR_BY_MODEL = {MODEL_EN: KOKORO_MODEL_DIR, MODEL_ZH: KOKORO_ZH_MODEL_DIR}
+DEFAULT_MODEL = {FAMILY_EN: MODEL_EN, FAMILY_ZH: MODEL_ZH}
+DEFAULT_FAMILY = FAMILY_EN
+PREVIEW_TEXT = {
+    FAMILY_EN: "Hello, this is a preview of my voice.",
+    FAMILY_ZH: "你好，这是我的声音试听。",
+}
 
 
 def parse_kokoro_voice_ids(voice_id: str) -> list[str]:
@@ -37,8 +58,76 @@ def parse_kokoro_voice_ids(voice_id: str) -> list[str]:
     return parts
 
 
+def kokoro_family(voice_id: str) -> str:
+    """The language a voice reads. Decides G2P, chunking and UI grouping."""
+    item = KOKORO_VOICE_BY_ID.get(voice_id) or {}
+    family = str(item.get("family") or DEFAULT_FAMILY)
+    return family if family in DEFAULT_MODEL else DEFAULT_FAMILY
+
+
+def kokoro_model_key(voice_id: str) -> str:
+    """The checkpoint a voice belongs to. Decides which weights get loaded."""
+    item = KOKORO_VOICE_BY_ID.get(voice_id) or {}
+    model = str(item.get("model") or DEFAULT_MODEL.get(kokoro_family(voice_id), MODEL_EN))
+    return model if model in MODEL_ID_BY_MODEL else MODEL_EN
+
+
+def kokoro_model_keys(ids: list[str]) -> list[str]:
+    seen: list[str] = []
+    for voice_id in ids:
+        model = kokoro_model_key(voice_id)
+        if model not in seen:
+            seen.append(model)
+    return seen
+
+
+def same_kokoro_model(ids: list[str]) -> bool:
+    return len(kokoro_model_keys(ids)) <= 1
+
+
+def require_one_model(ids: list[str]) -> None:
+    """One job = one checkpoint. Loading two 327 MB checkpoints to render one
+    script would thrash memory, and cross-checkpoint style vectors are not
+    interchangeable."""
+    if not same_kokoro_model(ids):
+        raise ValueError(
+            "Kokoro 不同模型的音色不能同时使用，请只保留同一个模型的音色（Maple 等 v1.1-zh 英文音色不能与 Heart 等 v1.0 混用）"
+        )
+
+
+def kokoro_families(ids: list[str]) -> list[str]:
+    seen: list[str] = []
+    for voice_id in ids:
+        family = kokoro_family(voice_id)
+        if family not in seen:
+            seen.append(family)
+    return seen
+
+
+def same_kokoro_family(ids: list[str]) -> bool:
+    return len(kokoro_families(ids)) <= 1
+
+
+def require_same_family(ids: list[str]) -> None:
+    if not same_kokoro_family(ids):
+        raise ValueError("Kokoro 融合只支持同一语系的音色（英文与中文不能混融）")
+
+
+def require_one_family(ids: list[str]) -> None:
+    """One job = one language family. A Chinese voice reading an English-chunked
+    script (or the reverse) is garbage. Mixing families is invalid even when they
+    share a checkpoint (Maple + zf_001)."""
+    if not same_kokoro_family(ids):
+        raise ValueError("Kokoro 英文音色和中文音色不能同时选，请只保留同一语系的音色")
+
+
+def family_language(family: str) -> str:
+    return "Chinese" if family == FAMILY_ZH else "English"
+
+
 def kokoro_blend_name(ids: list[str]) -> str:
     return " + ".join(KOKORO_VOICE_BY_ID[item]["label"] for item in ids)
+
 
 
 def kokoro_gender(voice_id: str) -> str:
@@ -107,6 +196,8 @@ def write_blended_voice(ids: list[str], weights: list[float] | None = None) -> P
     from mlx_audio.tts.models.kokoro.voice import load_voice_tensor
     import mlx.core as mx
 
+    require_same_family(ids)
+    require_one_model(ids)
     require_same_gender(ids)
     packs = []
     for vid in ids:
@@ -123,15 +214,61 @@ def write_blended_voice(ids: list[str], weights: list[float] | None = None) -> P
 
 
 def kokoro_lang_code(voice_id: str) -> str:
+    """Kokoro `lang_code` for a voice: `z` Chinese, `a` US English, `b` UK."""
+    if kokoro_family(voice_id) == FAMILY_ZH:
+        return "z"
     return "b" if voice_id.startswith(("bf_", "bm_")) else "a"
 
 
+def kokoro_model_dir(model_key: str) -> Path:
+    return MODEL_DIR_BY_MODEL.get(model_key, KOKORO_MODEL_DIR)
+
+
+def kokoro_model_id(model_key: str) -> str:
+    return MODEL_ID_BY_MODEL.get(model_key, KOKORO_MODEL_ID)
+
+
+def default_voice(family: str) -> str:
+    return DEFAULT_KOKORO_ZH_VOICE if family == FAMILY_ZH else DEFAULT_KOKORO_VOICE
+
+
 def kokoro_voice_path(voice_id: str) -> Path:
-    return KOKORO_MODEL_DIR / "voices" / f"{voice_id}.safetensors"
+    """Resolve a voice pack by the checkpoint it belongs to, not its language."""
+    return kokoro_model_dir(kokoro_model_key(voice_id)) / "voices" / f"{voice_id}.safetensors"
+
+
+def is_kokoro_model_ready(model_key: str) -> bool:
+    return is_local_model_dir(kokoro_model_dir(model_key))
+
+
+def is_kokoro_family_ready(family: str) -> bool:
+    """A family is usable when its checkpoint and default voice pack are present."""
+    return is_kokoro_model_ready(DEFAULT_MODEL.get(family, MODEL_EN)) and kokoro_voice_path(
+        default_voice(family)
+    ).exists()
 
 
 def is_kokoro_ready() -> bool:
-    return is_local_model_dir(KOKORO_MODEL_DIR) and kokoro_voice_path(DEFAULT_KOKORO_VOICE).exists()
+    return is_kokoro_family_ready(FAMILY_EN)
+
+
+def is_kokoro_zh_ready() -> bool:
+    return is_kokoro_family_ready(FAMILY_ZH)
+
+
+def download_hint(model_key: str) -> str:
+    target = "download-kokoro-zh" if model_key == MODEL_ZH else "download-kokoro"
+    return f"Kokoro model is missing. Run: make {target}"
+
+
+def require_kokoro_model(model_key: str) -> None:
+    if not is_kokoro_model_ready(model_key):
+        raise FileNotFoundError(download_hint(model_key))
+
+
+def require_kokoro_family(family: str) -> None:
+    if not is_kokoro_family_ready(family):
+        raise FileNotFoundError(download_hint(DEFAULT_MODEL.get(family, MODEL_EN)))
 
 
 def require_misaki_en() -> None:
@@ -145,6 +282,14 @@ def require_misaki_en() -> None:
         ) from exc
     if not spacy.util.is_package("en_core_web_sm"):
         raise ImportError("Kokoro needs spaCy model en_core_web_sm. Run: make setup")
+
+
+def require_misaki_zh() -> None:
+    try:
+        import misaki.zh  # noqa: F401
+    except ImportError as exc:
+        raise ImportError("Kokoro Chinese G2P needs misaki[zh]. Run: make setup") from exc
+
 
 
 _g2p_lock = threading.Lock()
@@ -164,6 +309,52 @@ def english_g2p(*, british: bool = False):
                 fallback = None
             _g2p_cache[british] = G2P(trf=False, british=british, fallback=fallback, unk="")
         return _g2p_cache[british]
+
+
+_zh_g2p: Any = None
+
+
+def chinese_speed(phoneme_len: int) -> float:
+    """Upstream's anti-rushing speed curve for v1.1-zh.
+
+    The Chinese voices were trained on clips of at most roughly 100 tokens, so
+    longer phoneme strings come out rushed. The official `make_zh.py` compensates
+    with a piecewise-linear slow-down; mlx-audio only accepts a scalar speed, so
+    the curve is resolved here from the phoneme count.
+    """
+    if phoneme_len <= 83:
+        speed = 1.0
+    elif phoneme_len < 183:
+        speed = 1 - (phoneme_len - 83) / 500
+    else:
+        speed = 0.8
+    return speed * 1.1
+
+
+def chinese_g2p():
+    """misaki ZHG2P configured for v1.1-zh: Zhuyin output plus English passthrough.
+
+    mlx-audio builds its `z` pipeline with a bare `ZHG2P()`, which selects the
+    legacy pinyin -> IPA path. v1.1-zh was trained on the 1.1 frontend (Bopomofo
+    initials/finals + tone arrows), so we swap the G2P in after the pipeline is
+    built. English runs inside a Chinese script go through misaki's English G2P.
+    """
+    global _zh_g2p
+
+    require_misaki_zh()
+    # Grab the English G2P before taking the lock; english_g2p() takes it too.
+    english = english_g2p(british=False)
+    with _g2p_lock:
+        if _zh_g2p is None:
+            import warnings
+
+            with warnings.catch_warnings():
+                # jieba ships regexes with invalid escapes; noisy but harmless.
+                warnings.simplefilter("ignore", SyntaxWarning)
+                from misaki.zh import ZHG2P
+
+            _zh_g2p = ZHG2P(version="1.1", en_callable=lambda text: english(text)[0])
+        return _zh_g2p
 
 
 # Isolated A is tagged DT → ɐ (article). Force letter names instead.
@@ -377,7 +568,9 @@ def _annotate_token(text: str, phonemes: str | None) -> str:
     return word
 
 
-def phonemize_text(text: str, *, british: bool = False) -> dict:
+def phonemize_text(text: str, *, british: bool = False, family: str = FAMILY_EN) -> dict:
+    if family == FAMILY_ZH:
+        return _phonemize_zh(text)
     raw = spell_letter_clip((text or "").strip(), british=british)
     if not raw:
         return {"text": "", "phonemes": "", "annotated": "", "tokens": []}
@@ -405,16 +598,38 @@ def phonemize_text(text: str, *, british: bool = False) -> dict:
     }
 
 
+def _phonemize_zh(text: str) -> dict:
+    """Chinese phonemes for the v1.1-zh checkpoint.
+
+    ZHG2P emits a flat Zhuyin string with no per-word token alignment, so there
+    is nothing to annotate inline and the editor renders it read-only.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {"text": "", "phonemes": "", "annotated": "", "tokens": []}
+    phonemes, _ = chinese_g2p()(raw)
+    return {
+        "text": raw,
+        "phonemes": str(phonemes or "").strip(),
+        "annotated": "",
+        "tokens": [],
+    }
+
+
 class KokoroEngine:
     def __init__(self) -> None:
         self.model = None
         self.sample_rate = 24000
         self.lock = threading.Lock()
         self.loaded = False
-        self.model_path = str(KOKORO_MODEL_DIR if is_kokoro_ready() else KOKORO_MODEL_ID)
+        self.family = DEFAULT_FAMILY
+        self.model_key = DEFAULT_MODEL[DEFAULT_FAMILY]
+        self.model_path = str(
+            KOKORO_MODEL_DIR if is_kokoro_model_ready(self.model_key) else KOKORO_MODEL_ID
+        )
 
     def ready(self) -> bool:
-        return is_kokoro_ready()
+        return is_kokoro_model_ready(self.model_key)
 
     def unload_unlocked(self) -> None:
         if self.model is None and not self.loaded:
@@ -427,11 +642,22 @@ class KokoroEngine:
         gc.collect()
         mx.clear_cache()
 
-    def _load_unlocked(self) -> None:
-        if self.loaded and self.model is not None:
+    def _load_unlocked(self, family: str = DEFAULT_FAMILY, model_key: str | None = None) -> None:
+        """Load the weights for `family`, honouring `model_key` when they diverge.
+
+        `af_maple` / `af_sol` / `bf_vale` read English (family `en`) but were
+        trained inside the v1.1-zh run, so callers pass their own `model_key`
+        instead of letting the family pick the checkpoint.
+        """
+        model_key = model_key or DEFAULT_MODEL.get(family, MODEL_EN)
+        if self.loaded and self.model is not None and self.model_key == model_key:
+            self.family = family
             return
-        if not is_kokoro_ready():
-            raise FileNotFoundError("Kokoro model is missing. Run: make download-kokoro")
+        require_kokoro_model(model_key)
+        # Chinese voices need misaki[zh]; everyone needs the English G2P, which
+        # the Chinese frontend also calls for embedded English words.
+        if family == FAMILY_ZH:
+            require_misaki_zh()
         require_misaki_en()
         from mlx_audio.tts.utils import load_model
         from .asr import asr_engine
@@ -442,23 +668,27 @@ class KokoroEngine:
         asr_engine.unload_unlocked()
         instruct_engine.unload_unlocked()
         self.unload_unlocked()
-        self.model_path = str(KOKORO_MODEL_DIR)
+        self.model_path = str(kokoro_model_dir(model_key))
         self.model = load_model(self.model_path)
         self.model.repo_id = self.model_path
         self.sample_rate = int(getattr(self.model, "sample_rate", 24000))
+        self.family = family
+        self.model_key = model_key
         self.loaded = True
 
-    def load(self) -> None:
+    def load(self, family: str = DEFAULT_FAMILY, model_key: str | None = None) -> None:
         from .engine import engine
 
         with engine.lock:
             with self.lock:
-                self._load_unlocked()
+                self._load_unlocked(family, model_key)
 
     def preview_voice(self, voice_id: str, weights: list[float] | str | None = None) -> Path:
         ids = parse_kokoro_voice_ids(voice_id)
         parsed = parse_blend_weights(ids, weights) if len(ids) > 1 else None
         if parsed:
+            require_same_family(ids)
+            require_one_model(ids)
             require_same_gender(ids)
             stamp = "-".join(f"{vid}_{int(round(w * 1000))}" for vid, w in zip(ids, normalize_weights(parsed)))
         else:
@@ -469,10 +699,11 @@ class KokoroEngine:
         dest.parent.mkdir(parents=True, exist_ok=True)
         from .engine import engine
 
+        family = kokoro_family(ids[0])
         with engine.lock:
             with self.lock:
-                self._load_unlocked()
-                audio, rate = self._generate_one("Hello, this is a preview of my voice.", ids, parsed)
+                self._load_unlocked(family, kokoro_model_key(ids[0]))
+                audio, rate = self._generate_one(PREVIEW_TEXT[family], ids, parsed)
                 audio_util.write_wav(dest, audio_util.to_float32(audio), rate)
         return dest
 
@@ -489,11 +720,18 @@ class KokoroEngine:
         weights: list[float] | None = None,
     ) -> tuple[np.ndarray, int]:
         ids = parse_kokoro_voice_ids(",".join(voice_id) if isinstance(voice_id, list) else voice_id)
-        british = kokoro_lang_code(ids[0]) == "b"
-        letter = single_letter_clip(text, british=british)
-        digit = None if letter else single_digit_clip(text, british=british)
-        if not letter and not digit:
-            text = spell_letter_clip(text, british=british)
+        family = kokoro_family(ids[0])
+        lang = kokoro_lang_code(ids[0])
+        british = lang == "b"
+        # The letter/digit carriers are English grapheme tricks; Chinese G2P
+        # already reads digits and letters out correctly on its own.
+        letter: str | None = None
+        digit: str | None = None
+        if family == FAMILY_EN:
+            letter = single_letter_clip(text, british=british)
+            digit = None if letter else single_digit_clip(text, british=british)
+            if not letter and not digit:
+                text = spell_letter_clip(text, british=british)
         blend_path: Path | None = None
         if len(ids) > 1:
             blend_path = write_blended_voice(ids, weights)
@@ -505,7 +743,6 @@ class KokoroEngine:
             voice_arg = str(pack)
         parts: list[np.ndarray] = []
         rate = self.sample_rate
-        lang = kokoro_lang_code(ids[0])
         try:
             if letter:
                 wave, rate = self._generate_carried(letter, voice_arg, lang, prefix="Letter")
@@ -516,11 +753,15 @@ class KokoroEngine:
                 if wave.size:
                     parts.append(wave)
             else:
+                speed = 1.0
+                if family == FAMILY_ZH:
+                    self._use_chinese_g2p()
+                    speed = chinese_speed(len(phonemize_text(text, family=FAMILY_ZH)["phonemes"]))
                 for item in self.model.generate(
                     text=text,
                     voice=voice_arg,
                     lang_code=lang,
-                    speed=1.0,
+                    speed=speed,
                     split_pattern=r"\n+",
                 ):
                     wave = self._wave_from_audio(item.audio)
@@ -533,6 +774,18 @@ class KokoroEngine:
         if not parts:
             raise RuntimeError(f"No audio generated for {','.join(ids)}")
         return (np.concatenate(parts) if len(parts) > 1 else parts[0], rate)
+
+    def _use_chinese_g2p(self) -> None:
+        """Give the cached `z` pipeline the v1.1-zh frontend.
+
+        mlx-audio constructs its Chinese pipeline with a bare `ZHG2P()`, which
+        silently selects the legacy pinyin -> IPA path; v1.1-zh was trained on
+        Bopomofo tokens and mispronounces everything else.
+        """
+        pipeline = self.model._get_pipeline("z")
+        g2p = chinese_g2p()
+        if getattr(pipeline, "g2p", None) is not g2p:
+            pipeline.g2p = g2p
 
     def _generate_carried(self, spoken: str, voice_arg: str, lang: str, *, prefix: str) -> tuple[np.ndarray, int]:
         pipeline = self.model._get_pipeline(lang)
@@ -562,9 +815,6 @@ class KokoroEngine:
         progress_cb=None,
         cancel_check=None,
     ) -> dict:
-        chunks = chunking.split_script(text, language or "English")
-        if not chunks:
-            raise ValueError("Script is empty after splitting")
         voice_list = [item for item in (voices or []) if item.get("id") or item.get("voices")]
         if not voice_list:
             voice_list = [
@@ -584,11 +834,26 @@ class KokoroEngine:
             item["voices"] = ids
             item["id"] = ",".join(ids)
             item["kind"] = "kokoro"
+            item["family"] = kokoro_family(ids[0])
+            item["model"] = kokoro_model_key(ids[0])
             item["name"] = item.get("name") or kokoro_blend_name(ids)
             item["blend"] = len(ids) > 1
             if item["blend"]:
+                require_same_family(ids)
                 require_same_gender(ids)
+                require_one_model(ids)
                 item["weights"] = parse_blend_weights(ids, item.get("weights"))
+        # Kokoro picks its G2P from the voice family, so the family also decides
+        # how the script is chunked, not the language dropdown.
+        selected_ids = [voice_id for item in voice_list for voice_id in item["voices"]]
+        require_one_family(selected_ids)
+        require_one_model(selected_ids)
+        family = kokoro_family(selected_ids[0])
+        model_key = kokoro_model_key(selected_ids[0])
+        language = family_language(family)
+        chunks = chunking.split_script(text, language)
+        if not chunks:
+            raise ValueError("Script is empty after splitting")
         started = time.perf_counter()
         native_sr = self.sample_rate
         stem = job_id or time.strftime("%Y%m%d-%H%M%S")
@@ -603,7 +868,7 @@ class KokoroEngine:
 
         with engine.lock:
             with self.lock:
-                self._load_unlocked()
+                self._load_unlocked(family, model_key)
                 for voice_offset, voice in enumerate(voice_list):
                     if cancel_check:
                         cancel_check()

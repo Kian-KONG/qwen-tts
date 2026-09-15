@@ -6,6 +6,7 @@
 - **描述音色**（VoiceDesign）：写一段声音描述造音色
 - **声音克隆**（Base）：3–10 秒参考音频 + 逐字稿，保存在本机 `data/voices/` 可反复选用
 - **轻量英文**（Kokoro-82M）：Apache 2.0 英文旁白，和 Qwen3 并列切换，不能克隆
+- **轻量中文**（Kokoro-82M v1.1-zh）：103 个音色（100 中文 + Maple/Sol/Vale 3 个英文），中文音色可中英混读，不能克隆
 - **语音转文字**（Qwen3-ASR 1.7B）：上传音频生成文稿或克隆逐字稿
 - **实时翻译字幕**：麦克风或会议播放声音短窗听写后用 Qwen3-1.7B 译成目标语，可弹出字幕窗，和配音队列分开
 - **Excel 导入**：每个非空单元格一段语音，按编号配音
@@ -27,6 +28,7 @@ make download-custom
 make download-asr
 make download-instruct
 make download-kokoro
+make download-kokoro-zh
 make start
 ```
 
@@ -45,6 +47,7 @@ make start
 | `make download-asr` | 拉 Qwen3-ASR 1.7B bf16（语音转文字） |
 | `make download-instruct` | 拉 Qwen3-1.7B bf16（实时翻译字幕） |
 | `make download-kokoro` | 拉 Kokoro-82M bf16（轻量英文配音） |
+| `make download-kokoro-zh` | 拉 Kokoro-82M v1.1-zh（100 个中文音色） |
 | `make start` | 打包前端并由 FastAPI 提供 |
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |
@@ -97,7 +100,11 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 
 可选 `instruct` 只控制语气（如 `Very happy.`），不会改成另一种音色。
 
-## 轻量英文（Kokoro）
+## 轻量配音（Kokoro）
+
+英文用 **Kokoro-82M v1.0**，中文用 **Kokoro-82M v1.1-zh**，是两套权重、两套词表，不能互相替代。
+
+### 英文
 
 `make download-kokoro` 后，配音页切到 **Kokoro**。固定英文音色（Heart / Bella / Adam 等），适合批量旁白，Apache 2.0 可商用。不能克隆或描述音色。生成时会卸掉 Qwen TTS。
 
@@ -113,6 +120,45 @@ curl -s -X POST http://127.0.0.1:8000/api/jobs \
   -F "blend=true" \
   -F "blend_weights=70,30" \
   -F "language=English"
+```
+
+### 中文
+
+`make download-kokoro-zh` 后，音色面板下方多出 **中文音色** 分组。上游 v1.1-zh 一共 100 个中文音色（55 女声 / 45 男声），默认只列出两个官方示例音色（`zf_001` / `zm_010`），点「展开全部」看其余。
+
+上游还带 3 个**英文**音色：Maple（`af_maple`）、Sol（`af_sol`）、Vale（`bf_vale`），是 v1.1-zh 那次训练里一起加进来的美式/英式女声，v1.0 里没有。它们显示在**英文音色**分组里、走英文读音，但权重仍在 v1.1-zh 检查点上——所以「说什么语言」和「用哪套权重」在代码里是两个独立的维度（`family` 与 `model`），不能合并。
+
+- 英文音色和中文音色**不能同时选**，切换检查点或语系都会替换当前选择，不会混选（后端直接拒绝）
+- 文稿按所选音色所属语系分句（中文 80 字/段，英文 220 字/段）；融合只支持同检查点 + 同性别
+- 中文音色没有 IPA 音标编辑（`[词](/音标/)` 标注是英文 G2P 的能力），「看读音」按钮在中文音色下会隐藏
+
+```bash
+# 中文
+curl -s -X POST http://127.0.0.1:8000/api/jobs \
+  -F "text=1. 这是一段中文试听。" \
+  -F "mode=kokoro" \
+  -F "speakers=zf_001" \
+  -F "language=Chinese"
+
+# v1.1-zh 自带的英文音色（走英文读音，权重仍是 v1.1-zh）
+curl -s -X POST http://127.0.0.1:8000/api/jobs \
+  -F "text=1. This is Maple reading English." \
+  -F "mode=kokoro" \
+  -F "speakers=af_maple" \
+  -F "language=English"
+```
+
+中文 G2P 用 `misaki[zh]` 的 v1.1 前端（注音符号 + 声调）。上游只发 `.pth` 和 `voices/*.pt`，`make download-kokoro-zh` 下载后会用 `scripts/pt_to_safetensors.py` 在本地转成 MLX 的 safetensors（不需要装 torch）。转换要点：
+
+- 官方 `.pth` 是 `nn.DataParallel` 存出来的，每个子模块的 key 都带一段 `module.`（`bert.module.embeddings...`）。mlx-audio 的 `sanitize()` 只按 `bert` / `text_encoder` / `predictor` / `decoder` 前缀匹配，前缀不剥掉就加载不上，所以转换时要还原成 `bert.embeddings...`（转换后 548 个张量，与 v1.0 的 key 集合逐一对应）
+- 下载只用国内镜像：config + 权重走 ModelScope，103 个音色走 hf-mirror（ModelScope 的镜像里没有 `voices/`）。hf-mirror 不代理 Xet 存储（会返回 401），所以 `mirrors.sh` 里设了 `HF_HUB_DISABLE_XET=1`
+
+中文长句会被上游的防「赶拍」曲线降速（v1.1-zh 训练数据只到 100 token 左右，超过就会赶）：音素 ≤83 用 1.1 倍速，之后线性降到 0.88 倍。
+
+改完这几处可以直接体检一遍（模型文件 / 音色路由 / 词表覆盖 / 速度曲线 / ASR 回读）：
+
+```bash
+mlx-tts-env/bin/python scripts/check_kokoro_zh.py
 ```
 
 ## 描述音色（不用克隆）
@@ -234,6 +280,7 @@ omlx serve --model-dir ~/.omlx/models --port 8001
 ## 备注
 
 - 仅支持 Apple Silicon + MLX
+- 国内镜像下载走 ModelScope → hf-mirror；hf-mirror 不代理 HF 的 Xet 存储（会 401），`scripts/mirrors.sh` 已设 `HF_HUB_DISABLE_XET=1` 回落到普通 HTTP
 - 首次推理有 warmup，会偏慢；之后 RTF 大约 0.48，快于实时
 - 只使用 Base bf16，不要量化到 4bit
 - 参考音频和文字稿必须对齐，否则克隆质量会掉

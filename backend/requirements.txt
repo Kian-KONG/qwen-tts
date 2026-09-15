@@ -4,6 +4,12 @@ num2words
 phonemizer-fork
 espeakng-loader
 spacy
+# misaki[zh]: Mandarin G2P for Kokoro-82M-v1.1-zh (jieba + pypinyin + 数字转写)
+cn2an
+jieba
+ordered-set
+pypinyin
+pypinyin-dict
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.18

@@ -8,6 +8,9 @@ export UV_EXTRA_INDEX_URL="${UV_EXTRA_INDEX_URL:-https://pypi.org/simple}"
 export NPM_CONFIG_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export HF_MIRROR="${HF_MIRROR:-https://hf-mirror.com}"
+# Xet storage is served from cas-server.xethub.hf.co, which the China mirror does
+# not proxy (it answers 401). Force the plain HTTP/LFS path instead.
+export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 export MODELSCOPE_ENDPOINT="${MODELSCOPE_ENDPOINT:-https://www.modelscope.cn}"
 
 require_apple_silicon() {

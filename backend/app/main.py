@@ -20,12 +20,15 @@ from .config import (
     CUSTOM_MODEL_DIR,
     CUSTOM_MODEL_ID,
     DEFAULT_KOKORO_VOICE,
+    DEFAULT_KOKORO_ZH_VOICE,
     DEFAULT_SPEAKER,
     DESIGN_MODEL_DIR,
     DESIGN_MODEL_ID,
     FRONTEND_DIST,
     KOKORO_MODEL_ID,
     KOKORO_VOICES,
+    KOKORO_ZH_MODEL_ID,
+    KOKORO_ZH_VOICES,
     LANGUAGE,
     LANGUAGES,
     LANGUAGE_BY_ID,
@@ -43,7 +46,16 @@ from .engine import engine
 from .job_assets import full_wav, segment_wav, track_wav, zip_bytes
 from .job_repo import JobBusy, delete_job, get_public, item_list, list_public
 from .jobs import public_job, runner
-from .kokoro import is_kokoro_ready, kokoro_engine, parse_kokoro_voice_ids, phonemize_text
+from .kokoro import (
+    family_language,
+    is_kokoro_ready,
+    is_kokoro_zh_ready,
+    kokoro_engine,
+    kokoro_family,
+    kokoro_model_id,
+    parse_kokoro_voice_ids,
+    phonemize_text,
+)
 from .live import live_session, save_upload
 from .modes import parse_mode
 from .paths import is_local_model_dir
@@ -188,7 +200,7 @@ def _assemble_job_voices(
 
 def _current_model_id() -> str:
     if kokoro_engine.loaded:
-        return KOKORO_MODEL_ID
+        return kokoro_model_id(kokoro_engine.model_key)
     if engine.mode == "design":
         return DESIGN_MODEL_ID
     if engine.mode == "preset":
@@ -203,9 +215,27 @@ def _normalize_language(language: str | None) -> str:
     return value
 
 
-def _job_language(mode: str, language: str | None) -> str:
+# Kokoro job language is the voice family's language (English or Chinese), not
+# the request dropdown and not the checkpoint.
+KOKORO_LANGUAGES = {"English", "Chinese"}
+
+
+def _job_language(mode: str, language: str | None, voices: list[dict] | None = None) -> str:
     if mode == "kokoro":
-        return "English"
+        ids: list[str] = []
+        for item in voices or []:
+            parts = item.get("voices") or []
+            if parts:
+                ids.extend(str(p) for p in parts)
+            elif item.get("id"):
+                try:
+                    ids.extend(parse_kokoro_voice_ids(str(item["id"])))
+                except KeyError:
+                    pass
+        if ids:
+            return family_language(kokoro_family(ids[0]))
+        value = (language or "").strip()
+        return value if value in KOKORO_LANGUAGES else "English"
     return _normalize_language(language)
 
 
@@ -286,6 +316,8 @@ def health():
         "kokoro_model_id": KOKORO_MODEL_ID,
         "kokoro_model_ready": is_kokoro_ready(),
         "kokoro_loaded": kokoro_engine.loaded,
+        "kokoro_zh_model_id": KOKORO_ZH_MODEL_ID,
+        "kokoro_zh_model_ready": is_kokoro_zh_ready(),
         "live_translate_active": live_session.active,
         "current_mode": "kokoro" if kokoro_engine.loaded else engine.mode,
         "default_speaker": DEFAULT_SPEAKER,
@@ -328,12 +360,29 @@ def api_speakers():
 
 @app.get("/api/kokoro/voices")
 def api_kokoro_voices():
-    return {"data": KOKORO_VOICES, "default": DEFAULT_KOKORO_VOICE, "ready": is_kokoro_ready()}
+    return {
+        "data": KOKORO_VOICES + KOKORO_ZH_VOICES,
+        "default": DEFAULT_KOKORO_VOICE,
+        "default_zh": DEFAULT_KOKORO_ZH_VOICE,
+        "ready": is_kokoro_ready(),
+        "ready_zh": is_kokoro_zh_ready(),
+        # `ready_by_family` assumes language == checkpoint, which the English
+        # voices inside v1.1-zh break; `ready_by_model` is the accurate view.
+        "ready_by_family": {
+            "en": is_kokoro_ready(),
+            "zh": is_kokoro_zh_ready(),
+        },
+        "ready_by_model": {
+            "kokoro": is_kokoro_ready(),
+            "kokoro-zh": is_kokoro_zh_ready(),
+        },
+    }
 
 
 class PhonemeRequest(BaseModel):
     text: str
     british: bool = False
+    family: str = "en"
 
 
 @app.post("/api/kokoro/phonemes")
@@ -341,9 +390,10 @@ def api_kokoro_phonemes(payload: PhonemeRequest):
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
+    family = payload.family if payload.family in {"en", "zh"} else "en"
     try:
-        chunks = split_script(text, "English") or [text]
-        segments = [phonemize_text(chunk, british=payload.british) for chunk in chunks]
+        chunks = split_script(text, family_language(family)) or [text]
+        segments = [phonemize_text(chunk, british=payload.british, family=family) for chunk in chunks]
     except ImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -351,6 +401,7 @@ def api_kokoro_phonemes(payload: PhonemeRequest):
     numbered = "\n".join(f"{index}. {item['annotated']}" for index, item in enumerate(segments, 1))
     return {
         "british": payload.british,
+        "family": family,
         "phonemes": "\n".join(item["phonemes"] for item in segments),
         "annotated": numbered,
         "segments": segments,
@@ -699,7 +750,7 @@ async def api_create_job(
             ref_audio=audio_path,
             ref_text=transcript,
             batch_size=batch_size,
-            language=_job_language(job_mode, language),
+            language=_job_language(job_mode, language, job_voices),
             mode=job_mode,
             instruct=description,
             speaker=speaker_id,
@@ -751,7 +802,7 @@ def api_create_job_json(payload: JobRequest):
             ref_audio=audio_path,
             ref_text=transcript,
             batch_size=payload.batch_size,
-            language=_job_language(job_mode, payload.language),
+            language=_job_language(job_mode, payload.language, job_voices),
             mode=job_mode,
             instruct=description,
             speaker=speaker_id,
