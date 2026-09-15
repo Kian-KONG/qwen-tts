@@ -493,7 +493,7 @@ export async function createJob(opts: {
   refText?: string;
   batchSize: number;
   language: string;
-  mode?: "clone" | "design" | "preset" | "mixed" | "kokoro";
+  mode?: "clone" | "design" | "preset" | "mixed" | "kokoro" | "longcat";
   instruct?: string;
   speaker?: string;
   speakers?: string[];

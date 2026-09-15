@@ -13,6 +13,8 @@ def parse_mode(mode: str | None, *, strict: bool = True) -> str:
         return "clone"
     if value in {"kokoro", "kokoro-82m", "light", "light_en"}:
         return "kokoro"
+    if value in {"longcat", "longcat-audiodit", "audiodit"}:
+        return "longcat"
     if strict:
         raise ValueError(f"Unsupported mode: {mode}")
     return "clone"

@@ -141,6 +141,11 @@ def assemble_job_voices(
         speaker_id = str((first.get("voices") or [first["id"]])[0])
         return "kokoro", job_voices, speaker_id, "", "", ""
 
+    if mode == "longcat":
+        clone_ids = parse_id_list(voice_ids, voice_id)
+        clones = clone_voices(clone_ids, ref_audio, ref_text)
+        return "longcat", clones, "", str(clones[0]["ref_audio"]), str(clones[0]["ref_text"]), ""
+
     preset_ids = parse_id_list(speakers, speaker)
     clone_ids = parse_id_list(voice_ids)
     if voice_id:

@@ -938,7 +938,7 @@ def openai_speech(payload: SpeechRequest, authorization: Optional[str] = Header(
             ref_audio, ref_text = "", ""
         else:
             ref_audio, ref_text = _resolve_clone(payload.voice, payload.ref_audio, payload.ref_text)
-        if job_mode == "clone":
+        if job_mode == "longcat":
             stats = longcat_engine.synthesize(
                 payload.input,
                 ref_audio,
@@ -988,12 +988,13 @@ async def openai_clone(
         tmp.write(await ref_audio.read())
         tmp_path = Path(tmp.name)
     try:
-        stats = longcat_engine.synthesize(
+        stats = engine.synthesize(
             input,
             str(tmp_path),
             ref_text,
             batch_size=batch_size,
             language=_normalize_language(language),
+            mode="clone",
         )
         from .audio_util import convert_format
 

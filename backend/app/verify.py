@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from .asr import asr_engine
 from .config import GAP_MS
-from .engine import JobCancelled, _voice_kind, engine
+from .engine import JobCancelled, engine
 from .text_match import texts_match
 
 
@@ -85,54 +85,31 @@ def run_verify_round(
         if stage_cb:
             stage_cb("retake")
         mark(asr_hi)
-        voice_by_id = {str(item.get("id") or ""): item for item in voices}
-        voice_by_name = {str(item.get("name") or ""): item for item in voices}
+        if str(stats.get("engine") or stats.get("mode") or "") == "longcat":
+            from .longcat import longcat_engine
 
-        def voice_for(segment: dict) -> dict | None:
-            return voice_by_id.get(str(segment.get("voice_id") or "")) or voice_by_name.get(
-                str(segment.get("voice") or "")
+            longcat_engine.retake_segments(
+                stats=stats,
+                voices=voices,
+                mismatches=mismatches,
+                language=language,
+                stable=stable,
+                script_name=script_name,
+                created_at=created_at,
+                progress_cb=lambda local: mark(asr_hi + (retake_hi - asr_hi) * local),
+                cancel_check=cancel_check,
             )
-
-        clone_mismatches = [
-            item
-            for item in mismatches
-            if _voice_kind(voice_for(item) or {}, "preset") == "clone"
-        ]
-        qwen_mismatches = [item for item in mismatches if item not in clone_mismatches]
-        clone_total = len(clone_mismatches)
-        qwen_total = len(qwen_mismatches)
-        split_total = max(clone_total + qwen_total, 1)
-
-        def retake_progress(local: float, start: float, span: float) -> None:
-            mark(asr_hi + (retake_hi - asr_hi) * (start + local * span))
-
-        if qwen_mismatches:
+        else:
             engine.retake_segments(
                 stats=stats,
                 voices=voices,
-                mismatches=qwen_mismatches,
+                mismatches=mismatches,
                 language=language,
                 stable=stable,
                 temperature=temperature,
                 script_name=script_name,
                 created_at=created_at,
-                progress_cb=lambda local: retake_progress(local, 0.0, qwen_total / split_total),
-                cancel_check=cancel_check,
-            )
-        if clone_mismatches:
-            from .longcat import longcat_engine
-
-            start = qwen_total / split_total
-            span = clone_total / split_total
-            longcat_engine.retake_segments(
-                stats=stats,
-                voices=voices,
-                mismatches=clone_mismatches,
-                language=language,
-                stable=stable,
-                script_name=script_name,
-                created_at=created_at,
-                progress_cb=lambda local: retake_progress(local, start, span),
+                progress_cb=lambda local: mark(asr_hi + (retake_hi - asr_hi) * local),
                 cancel_check=cancel_check,
             )
         summary["retaken"] = sum(1 for item in mismatches if item.get("retaken"))

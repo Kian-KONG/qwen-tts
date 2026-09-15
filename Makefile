@@ -15,7 +15,7 @@ export HF_MIRROR ?= https://hf-mirror.com
 help:
 	@echo "Apple Silicon / MLX targets:"
 	@echo "  make setup         Install Python env, mlx-audio, ffmpeg"
-	@echo "  make download      Download Base bf16 (Qwen clone checkpoint)"
+	@echo "  make download      Download Base bf16 (Qwen voice clone)"
 	@echo "  make download-design Download VoiceDesign bf16 (described voice)"
 	@echo "  make download-custom Download CustomVoice bf16 (preset speakers)"
 	@echo "  make download-asr   Download Qwen3-ASR 1.7B bf16 (speech-to-text)"

@@ -273,7 +273,7 @@ class LongCatEngine:
         stats = {
             "chunks": len(chunks),
             "language": language,
-            "mode": "clone",
+            "mode": "longcat",
             "speaker": None,
             "speakers": [str(item.get("name") or item.get("id")) for item in voice_list],
             "batch_size": max(1, batch_size),

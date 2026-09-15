@@ -160,6 +160,7 @@ function modeLabel(mode?: string) {
     clone: "mode.clone",
     mixed: "mode.mixed",
     kokoro: "mode.kokoro",
+    longcat: "mode.longcat",
   };
   return keys[mode] ? t(keys[mode]) : mode;
 }
@@ -233,6 +234,14 @@ function stored(key: string, fallback: string): string {
   }
 }
 
+type DubEngine = "qwen" | "kokoro" | "longcat";
+
+function storedEngine(): DubEngine {
+  const value = stored(ENGINE_KEY, "qwen");
+  if (value === "kokoro" || value === "longcat") return value;
+  return "qwen";
+}
+
 function storedList(key: string, fallback: string[]): string[] {
   try {
     const raw = window.localStorage.getItem(key);
@@ -280,13 +289,11 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [languages, setLanguages] = useState<Language[]>([]);
   const [language, setLanguage] = useState(() =>
-    stored(ENGINE_KEY, "qwen") === "kokoro" ? "English" : "Auto",
+    storedEngine() === "kokoro" ? "English" : "Auto",
   );
   const [voices, setVoices] = useState<Voice[]>([]);
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
-  const [dubEngine, setDubEngine] = useState<"qwen" | "kokoro">(() =>
-    stored(ENGINE_KEY, "qwen") === "kokoro" ? "kokoro" : "qwen",
-  );
+  const [dubEngine, setDubEngine] = useState<DubEngine>(storedEngine);
   const [kokoroVoices, setKokoroVoices] = useState<Speaker[]>([]);
   const [kokoroReadyByModel, setKokoroReadyByModel] = useState<Record<string, boolean>>({});
   const [showAllKokoroZh, setShowAllKokoroZh] = useState(false);
@@ -390,6 +397,18 @@ export default function App() {
     () => kokoroVoices.filter((item) => (item.family || "en") === "en"),
     [kokoroVoices],
   );
+  const kokoroEnUsVoices = useMemo(
+    () => kokoroEnVoices.filter((item) => item.native === "US" && (item.model || "kokoro") === "kokoro"),
+    [kokoroEnVoices],
+  );
+  const kokoroEnUkVoices = useMemo(
+    () => kokoroEnVoices.filter((item) => item.native === "UK" && (item.model || "kokoro") === "kokoro"),
+    [kokoroEnVoices],
+  );
+  const kokoroEnZhVoices = useMemo(
+    () => kokoroEnVoices.filter((item) => (item.model || "kokoro") === "kokoro-zh"),
+    [kokoroEnVoices],
+  );
   const kokoroZhVoices = useMemo(
     () => kokoroVoices.filter((item) => item.family === "zh"),
     [kokoroVoices],
@@ -475,24 +494,26 @@ export default function App() {
       });
     }
     const items: { key: string; kind: "preset" | "design" | "clone" | "kokoro"; name: string; detail?: string; remove: () => void }[] = [];
-    for (const id of selectedSpeakers) {
-      const speaker = speakers.find((item) => item.id === id);
-      items.push({
-        key: `preset:${id}`,
-        kind: "preset",
-        name: speaker?.label || id,
-        detail: speaker?.description,
-        remove: () => setSelectedSpeakers((current) => current.filter((item) => item !== id)),
-      });
-    }
-    for (const design of designs) {
-      items.push({
-        key: `design:${design.id}`,
-        kind: "design",
-        name: design.name,
-        detail: design.instruct.slice(0, 42),
-        remove: () => setDesigns((current) => current.filter((item) => item.id !== design.id)),
-      });
+    if (dubEngine !== "longcat") {
+      for (const id of selectedSpeakers) {
+        const speaker = speakers.find((item) => item.id === id);
+        items.push({
+          key: `preset:${id}`,
+          kind: "preset",
+          name: speaker?.label || id,
+          detail: speaker?.description,
+          remove: () => setSelectedSpeakers((current) => current.filter((item) => item !== id)),
+        });
+      }
+      for (const design of designs) {
+        items.push({
+          key: `design:${design.id}`,
+          kind: "design",
+          name: design.name,
+          detail: design.instruct.slice(0, 42),
+          remove: () => setDesigns((current) => current.filter((item) => item.id !== design.id)),
+        });
+      }
     }
     for (const id of selectedVoiceIds) {
       const voice = voices.find((item) => item.id === id);
@@ -1098,6 +1119,20 @@ export default function App() {
               language: kokoroFamily === "zh" ? "Chinese" : "English",
               scriptName: scriptName.trim() || t("script.fallbackName"),
             })
+          : dubEngine === "longcat"
+            ? await createJob({
+                text: markdown,
+                mode: "longcat",
+                voiceIds: selectedVoiceIds.length ? selectedVoiceIds : undefined,
+                refAudio: pendingClone ? refFile || undefined : undefined,
+                refText: pendingClone ? refText : undefined,
+                stable: stableDub,
+                temperature,
+                verifyAsr,
+                batchSize,
+                language,
+                scriptName: scriptName.trim() || t("script.fallbackName"),
+              })
           : await createJob({
               text: markdown,
               mode: jobMode,
@@ -1175,7 +1210,7 @@ export default function App() {
     });
   }
 
-  function pickEngine(next: "qwen" | "kokoro") {
+  function pickEngine(next: DubEngine) {
     setDubEngine(next);
     setCloneStudioOpen(false);
     if (next === "kokoro") {
@@ -1499,7 +1534,7 @@ export default function App() {
         : dubEngine === "kokoro"
           ? (kokoroModel === "kokoro-zh" ? health?.kokoro_zh_model_id : health?.kokoro_model_id)?.split("/").pop() ||
             "Kokoro-82M"
-        : cloneSelected
+        : dubEngine === "longcat"
           ? health?.longcat_model_id?.split("/").pop() || "LongCat-AudioDiT-3.5B"
         : (
             health?.current_mode === "design"
@@ -1525,7 +1560,7 @@ export default function App() {
             : health?.kokoro_loaded
               ? t("status.kokoroLoaded")
               : t("status.kokoroReady")
-        : cloneSelected
+        : dubEngine === "longcat"
           ? longcatMissing
             ? t("status.longcatMissing")
             : health?.longcat_loaded
@@ -1598,7 +1633,7 @@ export default function App() {
                       ? Boolean(health?.instruct_loaded || health?.instruct_model_ready)
                       : dubEngine === "kokoro"
                         ? !kokoroMissing
-                        : cloneSelected
+                        : dubEngine === "longcat"
                           ? Boolean(health?.longcat_loaded || health?.longcat_model_ready)
                           : health?.model_loaded || health?.model_dir_ready
                 )
@@ -1760,12 +1795,21 @@ export default function App() {
             >
               Kokoro
             </button>
+            <button
+              type="button"
+              className={dubEngine === "longcat" ? "active" : ""}
+              onClick={() => pickEngine("longcat")}
+            >
+              LongCat
+            </button>
           </div>
           <p className="hint">
             {dubEngine === "kokoro"
               ? blendingKokoro
                 ? t("voices.hintBlend")
                 : t("voices.hintKokoro")
+              : dubEngine === "longcat"
+                ? t("voices.hintLongcat")
               : t("voices.hintQwen")}
           </p>
           <div className="roster">
@@ -1799,6 +1843,8 @@ export default function App() {
               <p className="hint">
                 {dubEngine === "kokoro"
                   ? t("voices.emptyKokoro")
+                  : dubEngine === "longcat"
+                    ? t("voices.emptyLongcat")
                   : t("voices.emptyQwen")}
               </p>
             )}
@@ -1862,27 +1908,37 @@ export default function App() {
                 onWeight={(id, value) => setKokoroWeights((current) => ({ ...current, [id]: value }))}
               />
             ) : null}
-            <div className="speaker-group-head">
-              <span className="speaker-group-title">{t("voices.kokoroGroupEn")}</span>
-            </div>
-            <div className="speaker-grid">
-              {kokoroEnVoices.map((item) => (
-                <SpeakerCard
-                  key={item.id}
-                  kind="kokoro"
-                  id={item.id}
-                  name={item.label}
-                  native={item.native}
-                  description={item.description}
-                  selected={selectedKokoro.includes(item.id)}
-                  previewing={previewingSpeaker === item.id}
-                  playing={playingVoiceId === `kokoro:${item.id}`}
-                  previewDisabled={kokoroMissingFor(item.id) || previewingSpeaker !== null}
-                  onSelect={() => toggleKokoro(item.id)}
-                  onPreview={() => void togglePlayKokoro(item.id)}
-                />
-              ))}
-            </div>
+            {[
+              { key: "us", title: t("voices.kokoroGroupEnUs"), items: kokoroEnUsVoices },
+              { key: "uk", title: t("voices.kokoroGroupEnUk"), items: kokoroEnUkVoices },
+              { key: "enzh", title: t("voices.kokoroGroupEnZh"), items: kokoroEnZhVoices },
+            ].map((group) =>
+              group.items.length ? (
+                <div key={group.key}>
+                  <div className="speaker-group-head">
+                    <span className="speaker-group-title">{group.title}</span>
+                  </div>
+                  <div className="speaker-grid">
+                    {group.items.map((item) => (
+                      <SpeakerCard
+                        key={item.id}
+                        kind="kokoro"
+                        id={item.id}
+                        name={item.label}
+                        native={item.native}
+                        description={item.description}
+                        selected={selectedKokoro.includes(item.id)}
+                        previewing={previewingSpeaker === item.id}
+                        playing={playingVoiceId === `kokoro:${item.id}`}
+                        previewDisabled={kokoroMissingFor(item.id) || previewingSpeaker !== null}
+                        onSelect={() => toggleKokoro(item.id)}
+                        onPreview={() => void togglePlayKokoro(item.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null,
+            )}
             {kokoroZhVoices.length ? (
               <>
                 <div className="speaker-group-head">
@@ -1919,6 +1975,8 @@ export default function App() {
             ) : null}
           </FoldSection>
           ) : (
+          <>
+          {dubEngine === "qwen" ? (
           <>
           <FoldSection
             title={t("voices.presetTitle")}
@@ -2010,16 +2068,24 @@ export default function App() {
               {t("voices.addSelected")}
             </button>
           </FoldSection>
+          </>
+          ) : null}
 
           <FoldSection
-            title={t("voices.cloneTitle")}
+            title={dubEngine === "longcat" ? t("voices.longcatTitle") : t("voices.cloneTitle")}
             badge={`${selectedVoiceIds.length}${voices.length ? `/${voices.length}` : ""}`}
-            open={voiceFold === "clone"}
+            open={dubEngine === "longcat" || voiceFold === "clone"}
             onToggle={() => setVoiceFold("clone")}
           >
             <p className="hint">
-              {t("voices.cloneHint")}
-              {longcatMissing ? t("voices.cloneMissing") : ""}
+              {dubEngine === "longcat" ? t("voices.longcatHint") : t("voices.cloneHint")}
+              {dubEngine === "longcat"
+                ? longcatMissing
+                  ? t("voices.longcatMissing")
+                  : ""
+                : health?.model_dir_ready
+                  ? ""
+                  : t("voices.cloneNeedBase")}
             </p>
             {voices.length ? (
               <div className="voice-list">
@@ -2075,8 +2141,6 @@ export default function App() {
           </FoldSection>
           </>
           )}
-            </>
-          )}
         </div>
         </section>
 
@@ -2108,7 +2172,11 @@ export default function App() {
                   onChange={(e) => onLanguageChange(e.target.value)}
                 >
                   {languages
-                    .filter((item) => dubEngine !== "kokoro" || item.id === "English" || item.id === "Chinese")
+                    .filter((item) => {
+                      if (dubEngine === "kokoro") return item.id === "English" || item.id === "Chinese";
+                      if (dubEngine === "longcat") return item.id === "Auto" || item.id === "English" || item.id === "Chinese";
+                      return true;
+                    })
                     .map((item) => (
                       <option key={item.id} value={item.id}>
                         {languageLabel(item.id, item.label)}
@@ -2250,9 +2318,10 @@ export default function App() {
                   filledSegments.length === 0 ||
                   voiceCount === 0 ||
                   (dubEngine === "kokoro" && kokoroMissing) ||
-                  (dubEngine !== "kokoro" && selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
-                  (dubEngine !== "kokoro" && designs.length > 0 && health?.design_model_ready === false) ||
-                  (dubEngine !== "kokoro" && cloneSelected && longcatMissing)
+                  (dubEngine === "longcat" && longcatMissing) ||
+                  (dubEngine === "qwen" && selectedSpeakers.length > 0 && health?.custom_model_ready === false) ||
+                  (dubEngine === "qwen" && designs.length > 0 && health?.design_model_ready === false) ||
+                  (dubEngine === "qwen" && cloneSelected && health?.model_dir_ready === false)
                 }
               >
                 {busy
