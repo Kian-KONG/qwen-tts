@@ -962,10 +962,16 @@ label {
 }
 
 .engine-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
   margin: 0 0 10px;
 }
 
 .engine-switch button {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 4px;
   background: transparent;
   color: var(--text);
   border: 1px solid var(--line);

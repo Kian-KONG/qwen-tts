@@ -22,7 +22,7 @@ help:
 	@echo "  make download-instruct Download Qwen3-1.7B bf16 (live translate)"
 	@echo "  make download-kokoro Download Kokoro-82M bf16 (light English dub)"
 	@echo "  make download-kokoro-zh Download Kokoro-82M v1.1-zh (100 Chinese voices)"
-	@echo "  make download-longcat Download LongCat-AudioDiT 3.5B bf16 (voice clone)"
+	@echo "  make download-longcat Download LongCat-AudioDiT 3.5B bf16 (clone + dub)"
 	@echo "  make check-kokoro-zh Verify the Chinese Kokoro setup end to end"
 	@echo "  make start         Stop anything on :8000, build frontend, serve"
 	@echo "  make dev           Backend + Vite hot reload"

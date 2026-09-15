@@ -568,7 +568,12 @@ export default function App() {
         if (zhDefault) return [zhDefault.id];
         return nextKokoro.data[0] ? [nextKokoro.data[0].id] : current;
       });
-      setSelectedVoiceIds((current) => current.filter((id) => nextVoices.some((item) => item.id === id)));
+      setSelectedVoiceIds((current) => {
+        const next = current.filter((id) => nextVoices.some((item) => item.id === id));
+        if (next.length) return next;
+        if (dubEngine === "longcat" && nextVoices[0]) return [nextVoices[0].id];
+        return next;
+      });
       setVoiceId((current) => {
         if (current && nextVoices.some((item) => item.id === current)) return current;
         return nextVoices[0]?.id || "";
@@ -1217,6 +1222,13 @@ export default function App() {
       setLanguage(kokoroFamily === "zh" ? "Chinese" : "English");
     } else {
       setPhonemePreview(null);
+    }
+    if (next === "longcat") {
+      setVoiceFold("clone");
+      setSelectedVoiceIds((current) => {
+        if (current.length) return current;
+        return voices[0] ? [voices[0].id] : current;
+      });
     }
   }
 
@@ -2141,6 +2153,8 @@ export default function App() {
           </FoldSection>
           </>
           )}
+          </>
+          )}
         </div>
         </section>
 
@@ -2230,6 +2244,8 @@ export default function App() {
             <p className="hint hint-compact">
               {dubEngine === "kokoro"
                 ? t(kokoroFamily === "zh" ? "script.hintKokoroZh" : "script.hintKokoro")
+                : dubEngine === "longcat"
+                  ? t("script.hintLongcat")
                 : verifyAsr
                 ? t("script.hintAsr")
                 : stableDub

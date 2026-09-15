@@ -7,7 +7,7 @@
 - **声音克隆**（Qwen3-TTS Base）：3–10 秒参考音频 + 逐字稿，保存在本机 `data/voices/`，Qwen3 页里选用
 - **轻量英文**（Kokoro-82M）：Apache 2.0 英文旁白，和 Qwen3 并列切换，不能克隆。v1.0 英文 28 个音色（11 美式女 / 9 美式男 / 4 英式女 / 4 英式男）
 - **轻量中文**（Kokoro-82M v1.1-zh）：103 个音色（100 中文 + Maple/Sol/Vale 3 个英文），中文音色可中英混读，不能克隆
-- **LongCat 克隆**（LongCat-AudioDiT 3.5B）：独立页，只做零样本克隆；切到该页再生成才会加载 LongCat
+- **LongCat**（LongCat-AudioDiT 3.5B）：和 Qwen3、Kokoro 并列切换；只做声音克隆 + 分段配音，没有预设/描述；切到该页再生成才会加载 LongCat
 - **语音转文字**（Qwen3-ASR 1.7B）：上传音频生成文稿或克隆逐字稿
 - **实时翻译字幕**：麦克风或会议播放声音短窗听写后用 Qwen3-1.7B 译成目标语，可弹出字幕窗，和配音队列分开
 - **Excel 导入**：每个非空单元格一段语音，按编号配音
@@ -50,7 +50,7 @@ make start
 | `make download-instruct` | 拉 Qwen3-1.7B bf16（实时翻译字幕） |
 | `make download-kokoro` | 拉 Kokoro-82M bf16（轻量英文配音） |
 | `make download-kokoro-zh` | 拉 Kokoro-82M v1.1-zh（100 个中文音色） |
-| `make download-longcat` | 拉 LongCat-AudioDiT 3.5B bf16（LongCat 页声音克隆） |
+| `make download-longcat` | 拉 LongCat-AudioDiT 3.5B bf16（LongCat 页克隆 + 配音） |
 | `make start` | 打包前端并由 FastAPI 提供 |
 | `make dev` | 后端 + Vite 热更新 |
 | `make health` | 探活 |
@@ -109,9 +109,9 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 
 Qwen3 页的「声音克隆」仍走 **Qwen3-TTS Base 1.7B**。先 `make download`，录音或上传 3–10 秒参考音频 + 逐字稿。
 
-## LongCat 克隆
+## LongCat 克隆 + 配音
 
-独立页，只做零样本克隆。先 `make download-longcat`，配音页切到 **LongCat**。权重约 7GB bf16，16GB 机器上生成前会卸掉 Qwen / Kokoro / ASR。推理用 APG（`guidance_method=apg`，`steps=16`）。
+和 Qwen3、Kokoro 并列的第三个引擎页，只做声音克隆再分段配音（没有预设/描述）。先 `make download-longcat`，配音页切到 **LongCat**。权重约 7GB bf16，16GB 机器上生成前会卸掉 Qwen / Kokoro / ASR。推理用 APG（`guidance_method=apg`，`steps=16`）。
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/jobs \
