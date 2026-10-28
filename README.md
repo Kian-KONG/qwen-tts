@@ -36,6 +36,8 @@ make start
 
 然后打开 http://127.0.0.1:8000
 
+复制 `.env.example` 为 `.env`，填 `AUTH_ALLOWED_EMAILS`（逗号分隔）和 `BETTER_AUTH_SECRET`。浏览器先注册再登录；白名单为空则不能注册。机器调用仍可用 `QWEN_TTS_API_KEY` 作为 Bearer。
+
 `make setup` 会装 Python 3.12 虚拟环境、`mlx-audio` 和 `ffmpeg`。公网访问用 GitHub Pages + 命名隧道；本机或局域网直接用 `:8000`。临时 trycloudflare **不是必需项**。
 
 ## 常用命令
@@ -51,8 +53,8 @@ make start
 | `make download-kokoro` | 拉 Kokoro-82M bf16（轻量英文配音） |
 | `make download-kokoro-zh` | 拉 Kokoro-82M v1.1-zh（100 个中文音色） |
 | `make download-longcat` | 拉 LongCat-AudioDiT 3.5B bf16（LongCat 页克隆 + 配音） |
-| `make start` | 打包前端并由 FastAPI 提供 |
-| `make dev` | 后端 + Vite 热更新 |
+| `make start` | 打包前端并由 FastAPI 提供（同时拉起 Better Auth） |
+| `make dev` | 后端 + Vite 热更新 + Better Auth |
 | `make health` | 探活 |
 | `make tunnel-setup` | 可选：安装 cloudflared |
 | `make tunnel` | 有 token 时拉固定隧道，否则临时 trycloudflare |
@@ -68,7 +70,7 @@ https://kian-kong.github.io/qwen-tts/
 1. 浏览器登录一次：`cloudflared tunnel login`
 2. 本机先 `make start`，另开终端 `make tunnel`（本机已有 token 时就是固定域名）
 3. 把 Cloudflare 公网地址写进仓库 **Settings → Secrets and variables → Actions → Variables**，变量名 `VITE_API_BASE`（不要末尾斜杠）。当前默认是 `https://tts.efforttracking.online`
-4. 若本机设了 `QWEN_TTS_API_KEY`，再加 Actions Secret `VITE_API_KEY`，值相同
+4. 页面走登录，不要把 `VITE_API_KEY` 打进前端。机器脚本仍可用 `QWEN_TTS_API_KEY`
 5. 等 **Actions → Deploy GitHub Pages** 跑绿，会写出 `gh-pages` 分支
 6. 仓库 **Settings → Pages → Build and deployment → Source** 选 **Deploy from a branch**，Branch 选 `gh-pages` / `/ (root)`，保存
 7. 打开 https://kian-kong.github.io/qwen-tts/

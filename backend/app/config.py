@@ -68,6 +68,16 @@ OUTPUT_SAMPLE_RATE = int(os.getenv("QWEN_TTS_OUTPUT_SR", "44100"))
 GAP_MS = int(os.getenv("QWEN_TTS_GAP_MS", "400"))
 MAX_CHUNK_CHARS = int(os.getenv("QWEN_TTS_MAX_CHUNK_CHARS", "0"))
 API_KEY = os.getenv("QWEN_TTS_API_KEY", "")
+AUTH_DB_PATH = Path(os.getenv("AUTH_DB_PATH", ROOT / "data" / "auth.sqlite")).resolve()
+AUTH_UPSTREAM = os.getenv("AUTH_UPSTREAM", "http://127.0.0.1:3001").rstrip("/")
+CORS_ORIGINS = [
+    item.strip()
+    for item in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000,https://kian-kong.github.io",
+    ).split(",")
+    if item.strip()
+]
 TTS_TEMPERATURE = float(os.getenv("QWEN_TTS_TEMPERATURE", "0.3"))
 TTS_SEED = int(os.getenv("QWEN_TTS_SEED", "42"))
 TTS_TOP_P = float(os.getenv("QWEN_TTS_TOP_P", "0.9"))

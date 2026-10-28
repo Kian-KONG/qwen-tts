@@ -20,6 +20,8 @@ data/voices/*
 data/scripts/*
 !data/scripts/.gitkeep
 !data/scripts/README.md
+data/auth.sqlite
+data/auth.sqlite-*
 *.wav
 *.mp3
 *.flac

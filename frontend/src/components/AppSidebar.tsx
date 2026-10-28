@@ -1,101 +1,41 @@
+import { AudioLines, Languages, LogOut, Mic, Moon, PanelLeft, PanelLeftClose, Sun } from "lucide-react";
+import { cn } from "cn";
+
+import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/logo";
+import { authClient } from "@/lib/auth-client";
+import { setSessionToken } from "@/lib/session-token";
+import { loginHref } from "@/lib/app-path";
 import type { AppRoute } from "../route";
 import { useI18n } from "../i18n";
 
 export type ThemeName = "light" | "dark";
 
-function IconDub() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function IconTranslate() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M4 6h9M8.5 6c0 5-2 9-5.5 12M7 10.5h5.5M13.5 13.5h6.2M16.6 13.5l2.6 7M19.7 20.5h-4.6"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function IconAsr() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M12 3.5a3.2 3.2 0 0 0-3.2 3.2v5.1a3.2 3.2 0 1 0 6.4 0V6.7A3.2 3.2 0 0 0 12 3.5Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-      <path d="M6.5 12.5a5.5 5.5 0 0 0 11 0M12 18v2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconSun() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="3.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <path
-        d="M12 3.5v2M12 18.5v2M4.8 4.8l1.4 1.4M17.8 17.8l1.4 1.4M3.5 12h2M18.5 12h2M4.8 19.2l1.4-1.4M17.8 6.2l1.4-1.4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function IconMoon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M16.2 13.6A6.4 6.4 0 0 1 10.4 5.2 6.6 6.6 0 1 0 18.8 14a6.3 6.3 0 0 1-2.6-.4Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 export function ThemeGlyph({ theme }: { theme: ThemeName }) {
-  return theme === "dark" ? <IconSun /> : <IconMoon />;
+  return theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />;
 }
 
-const ITEMS: { id: AppRoute; icon: typeof IconDub; labelKey: string }[] = [
-  { id: "dub", labelKey: "nav.dub", icon: IconDub },
-  { id: "transcribe", labelKey: "nav.transcribe", icon: IconAsr },
-  { id: "translate", labelKey: "nav.translate", icon: IconTranslate },
+const ITEMS: { id: AppRoute; icon: typeof AudioLines; labelKey: string }[] = [
+  { id: "dub", labelKey: "nav.dub", icon: AudioLines },
+  { id: "transcribe", labelKey: "nav.transcribe", icon: Mic },
+  { id: "translate", labelKey: "nav.translate", icon: Languages },
 ];
 
 export function AppSidebar({
   route,
   collapsed,
+  open,
   theme,
+  email,
   onGo,
   onToggle,
   onTheme,
 }: {
   route: AppRoute;
   collapsed: boolean;
+  open?: boolean;
   theme: ThemeName;
+  email?: string;
   onGo: (route: AppRoute) => void;
   onToggle: () => void;
   onTheme: () => void;
@@ -103,73 +43,114 @@ export function AppSidebar({
   const { t, locale, setLocale } = useI18n();
   const nextTheme = theme === "dark" ? "light" : "dark";
   const nextLocale = locale === "zh" ? "en" : "zh";
+
+  async function onSignOut() {
+    await authClient.signOut().catch(() => undefined);
+    setSessionToken(null);
+    window.location.assign(loginHref());
+  }
+
   return (
-    <aside className="sidebar">
-      <div className="sidebar-brand" title={t("app.brandTitle")}>
-        <span className="sidebar-mark">T</span>
-        <div className="sidebar-brand-text">
-          <strong>TTS</strong>
-          <span>{t("app.studio")}</span>
+    <aside
+      className={cn(
+        "flex h-full shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
+        "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-60 max-md:transition-transform",
+        open ? "max-md:translate-x-0" : "max-md:-translate-x-full",
+        collapsed ? "md:w-16" : "md:w-56",
+      )}
+    >
+      <div className={cn("flex h-14 items-center gap-2 px-3", collapsed && "md:justify-center md:px-2")}>
+        <Logo className="size-6 shrink-0 text-foreground" />
+        <div className={cn("min-w-0", collapsed && "md:hidden")}>
+          <strong className="type-h2 block truncate">TTS</strong>
+          <span className="type-caption text-muted-foreground">{t("app.studio")}</span>
         </div>
       </div>
-      <nav className="sidebar-nav">
+      <nav className="flex min-h-0 flex-1 flex-col gap-1 px-2 py-1" aria-label={t("app.brandTitle")}>
         {ITEMS.map((item) => {
           const Icon = item.icon;
           const label = t(item.labelKey);
+          const active = route === item.id;
           return (
-            <button
+            <Button
               key={item.id}
               type="button"
-              className={route === item.id ? "sidebar-link on" : "sidebar-link"}
-              onClick={() => onGo(item.id)}
+              variant="ghost"
               title={label}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "h-10 w-full justify-start gap-3 rounded-xl px-3 font-normal",
+                collapsed && "md:justify-center md:px-0",
+                active && "bg-sidebar-accent text-sidebar-accent-foreground",
+              )}
+              onClick={() => onGo(item.id)}
             >
-              <Icon />
-              <span>{label}</span>
-            </button>
+              <Icon className="size-4" />
+              <span className={cn("truncate", collapsed && "md:hidden")}>{label}</span>
+            </Button>
           );
         })}
       </nav>
-      <div className="sidebar-foot">
-        <button
+      <div className={cn("flex flex-col gap-1 border-t border-sidebar-border p-2", collapsed && "md:items-center")}>
+        {email ? (
+          <div className={cn("flex min-w-0 items-center gap-2 px-1", collapsed && "md:justify-center md:px-0")} title={email}>
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted type-caption">
+              {email.slice(0, 1).toUpperCase()}
+            </span>
+            <span className={cn("min-w-0 truncate type-caption text-muted-foreground", collapsed && "md:hidden")}>
+              {email}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={cn("ml-auto", collapsed && "md:hidden")}
+              onClick={() => void onSignOut()}
+              aria-label={t("auth.signOut")}
+            >
+              <LogOut />
+            </Button>
+          </div>
+        ) : null}
+        <Button
           type="button"
-          className="sidebar-locale"
+          variant="ghost"
+          className={cn("h-9 w-full justify-start gap-3 rounded-xl px-3 font-normal", collapsed && "md:justify-center md:px-0")}
           onClick={() => setLocale(nextLocale)}
           title={nextLocale === "en" ? t("locale.switchToEn") : t("locale.switchToZh")}
           aria-label={nextLocale === "en" ? t("locale.switchToEn") : t("locale.switchToZh")}
         >
-          <span className="sidebar-locale-mark">{nextLocale === "en" ? "EN" : "中"}</span>
-          <span>{t(nextLocale === "en" ? "locale.en" : "locale.zh")}</span>
-        </button>
-        <button
+          <span className="flex size-4 items-center justify-center text-[11px] font-bold">
+            {nextLocale === "en" ? "EN" : "中"}
+          </span>
+          <span className={cn("truncate", collapsed && "md:hidden")}>{t(nextLocale === "en" ? "locale.en" : "locale.zh")}</span>
+        </Button>
+        <Button
           type="button"
-          className="sidebar-theme"
+          variant="ghost"
+          className={cn("h-9 w-full justify-start gap-3 rounded-xl px-3 font-normal", collapsed && "md:justify-center md:px-0")}
           onClick={onTheme}
           title={nextTheme === "light" ? t("theme.toLight") : t("theme.toDark")}
           aria-label={nextTheme === "light" ? t("theme.toLightTheme") : t("theme.toDarkTheme")}
         >
           <ThemeGlyph theme={theme} />
-          <span>{t(nextTheme === "light" ? "theme.light" : "theme.dark")}</span>
-        </button>
-        <button
+          <span className={cn("truncate", collapsed && "md:hidden")}>
+            {t(nextTheme === "light" ? "theme.light" : "theme.dark")}
+          </span>
+        </Button>
+        <Button
           type="button"
-          className="sidebar-collapse"
+          variant="ghost"
+          className={cn("h-9 w-full justify-start gap-3 rounded-xl px-3 font-normal", collapsed && "md:justify-center md:px-0")}
           onClick={onToggle}
           title={collapsed ? t("sidebar.expandRail") : t("sidebar.collapseRail")}
           aria-label={collapsed ? t("sidebar.expandRail") : t("sidebar.collapseRail")}
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M15 6l-6 6 6 6"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span>{collapsed ? t("sidebar.expand") : t("sidebar.collapse")}</span>
-        </button>
+          {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
+          <span className={cn("truncate", collapsed && "md:hidden")}>
+            {collapsed ? t("sidebar.expand") : t("sidebar.collapse")}
+          </span>
+        </Button>
       </div>
     </aside>
   );

@@ -47,6 +47,7 @@ import { TranscribePanel } from "./components/TranscribePanel";
 import { LiveCaptionsPage } from "./components/LiveCaptionsPage";
 import { LiveTranslatePanel } from "./components/LiveTranslatePanel";
 import { AppSidebar, ThemeGlyph, type ThemeName } from "./components/AppSidebar";
+import { authClient } from "./lib/auth-client";
 import { AudioRow } from "./components/AudioRow";
 import { ClipList } from "./components/ClipList";
 import { TrackList } from "./components/TrackList";
@@ -219,10 +220,11 @@ function storedVoiceFold(): VoiceFold {
 }
 
 function storedTheme(): ThemeName {
-  return stored(THEME_KEY, "dark") === "light" ? "light" : "dark";
+  return stored(THEME_KEY, "light") === "dark" ? "dark" : "light";
 }
 
 function applyTheme(theme: ThemeName) {
+  document.documentElement.classList.toggle("dark", theme === "dark");
   document.documentElement.dataset.theme = theme;
 }
 
@@ -273,6 +275,7 @@ function storedJson<T>(key: string, fallback: T): T {
 
 export default function App() {
   const { t, locale, setLocale } = useI18n();
+  const session = authClient.useSession();
   const clonePrompt = t("msg.clonePrompt");
   const [route, go] = useHashRoute();
   const [railCollapsed, setRailCollapsed] = useState(() => stored(SIDEBAR_KEY, "0") === "1");
@@ -1590,7 +1593,9 @@ export default function App() {
       <AppSidebar
         route={route}
         collapsed={railCollapsed}
+        open={drawerOpen}
         theme={theme}
+        email={session.data?.user?.email}
         onGo={goRoute}
         onToggle={() => setRailCollapsed((open) => !open)}
         onTheme={toggleTheme}

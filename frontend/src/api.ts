@@ -1,3 +1,8 @@
+import { authClient } from "./lib/auth-client";
+import { currentAppPath, loginHref } from "./lib/app-path";
+import { isAuthPage } from "./lib/auth-routes";
+import { getSessionToken, setSessionToken, tokenFromAuthData } from "./lib/session-token";
+
 export type Voice = {
   id: string;
   name: string;
@@ -135,10 +140,28 @@ export function apiUrl(path: string): string {
 function authHeaders(extra?: HeadersInit): HeadersInit {
   const key = String(import.meta.env.VITE_API_KEY || "").trim();
   const headers = new Headers(extra);
-  if (key && !headers.has("Authorization")) {
+  const token = getSessionToken();
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  } else if (key && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${key}`);
   }
   return headers;
+}
+
+let tokenLoading: Promise<void> | null = null;
+
+async function ensureToken(): Promise<void> {
+  if (getSessionToken() || typeof window === "undefined") return;
+  if (isAuthPage(currentAppPath())) return;
+  tokenLoading ??= authClient
+    .getSession()
+    .then((res) => setSessionToken(tokenFromAuthData(res.data)))
+    .catch(() => undefined)
+    .finally(() => {
+      tokenLoading = null;
+    });
+  await tokenLoading;
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -151,11 +174,18 @@ async function parseError(res: Response): Promise<string> {
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
+  await ensureToken();
   const res = await fetch(apiUrl(path), {
     ...init,
     cache: "no-store",
+    credentials: "include",
     headers: authHeaders(init.headers),
   });
+  if (res.status === 401 && typeof window !== "undefined" && !isAuthPage(currentAppPath())) {
+    setSessionToken(null);
+    await authClient.signOut().catch(() => undefined);
+    window.location.assign(loginHref(currentAppPath()));
+  }
   if (!res.ok) throw new Error(await parseError(res));
   return res;
 }
@@ -470,7 +500,8 @@ export function withDownload(url: string): string {
 }
 
 export async function downloadFile(url: string, filename: string): Promise<void> {
-  const res = await fetch(url, { headers: authHeaders() });
+  await ensureToken();
+  const res = await fetch(url, { headers: authHeaders(), credentials: "include", cache: "no-store" });
   if (!res.ok) throw new Error(await parseError(res));
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);

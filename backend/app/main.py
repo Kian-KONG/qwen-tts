@@ -5,15 +5,17 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+import httpx
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .auth import require_user
+
 from . import audio_util, scripts, voices
 from .config import (
-    API_KEY,
     ASR_MODEL_DIR,
     ASR_MODEL_ID,
     BATCH_SIZE,
@@ -24,6 +26,8 @@ from .config import (
     DEFAULT_SPEAKER,
     DESIGN_MODEL_DIR,
     DESIGN_MODEL_ID,
+    AUTH_UPSTREAM,
+    CORS_ORIGINS,
     FRONTEND_DIST,
     KOKORO_MODEL_ID,
     KOKORO_VOICES,
@@ -67,11 +71,8 @@ from .voice_assembly import assemble_job_voices
 
 
 def _check_key(authorization: Optional[str]) -> None:
-    if not API_KEY:
-        return
-    token = (authorization or "").removeprefix("Bearer ").strip()
-    if token != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+    # Session or machine token is enforced by auth_guard on /api and /v1.
+    return
 
 
 def _wav_response(path: Path, filename: str, download: bool) -> FileResponse:
@@ -104,11 +105,61 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Qwen3-TTS Dubbing Studio", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def auth_guard(request: Request, call_next):
+    path = request.url.path
+    if request.method != "OPTIONS" and (path.startswith("/api/") or path.startswith("/v1/")):
+        try:
+            require_user(request)
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    return await call_next(request)
+
+
+_HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "content-encoding",
+        "content-length",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+    }
+)
+
+
+@app.api_route("/api/auth/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+async def proxy_auth(full_path: str, request: Request):
+    url = f"{AUTH_UPSTREAM}/api/auth/{full_path}"
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
+    headers = {key: value for key, value in request.headers.items() if key.lower() not in _HOP_BY_HOP}
+    body = await request.body()
+    async with httpx.AsyncClient(follow_redirects=False) as client:
+        upstream = await client.request(request.method, url, headers=headers, content=body, timeout=30)
+    response = Response(content=upstream.content, status_code=upstream.status_code)
+    for key, value in upstream.headers.multi_items():
+        if key.lower() not in _HOP_BY_HOP:
+            response.headers.append(key, value)
+    return response
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    principal = require_user(request)
+    return {"id": principal.user_id, "email": principal.email, "name": principal.name}
 
 
 class SpeechRequest(BaseModel):
