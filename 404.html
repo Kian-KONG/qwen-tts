@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TTS 配音</title>
+    <script>
+      (function () {
+        var base = "/qwen-tts";
+        var path = location.pathname;
+        if (path.indexOf(base) === 0) path = path.slice(base.length) || "/";
+        if (path.charAt(0) !== "/") path = "/" + path;
+        location.replace(base + "/#" + path + location.search);
+      })();
+    </script>
+  </head>
+  <body></body>
+</html>
